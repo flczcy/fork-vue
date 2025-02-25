@@ -392,6 +392,7 @@ function baseCreateRenderer(
       n1 = null
     }
 
+    // BAIL: 退出vue模板优化模式
     if (n2.patchFlag === PatchFlags.BAIL) {
       optimized = false
       n2.dynamicChildren = null
@@ -481,10 +482,15 @@ function baseCreateRenderer(
         }
     }
 
+    // patch 结束后 把自己(el or instance) 注册/设置 到父组件的 refs 中
+    // ref 必须要有 parentComponent 因为 ref 获取的是子树中的引用
     // set ref
     if (ref != null && parentComponent) {
+      // !n2 为 false
+      // setRef 还需要在 unmount 中调用, 最后一个参数为 true 表示在 unmount 中调用
       setRef(ref, n1 && n1.ref, parentSuspense, n2 || n1, !n2)
     }
+    // patch 执行完后,下面则是执行组件的 onMounted hooks
   }
 
   const processText: ProcessTextOrCommentFn = (n1, n2, container, anchor) => {
@@ -676,6 +682,8 @@ function baseCreateRenderer(
     // props
     if (props) {
       for (const key in props) {
+        // 这里故意排除 value 属性设置, 是因为某些情况下, value 属性需要在其他属性后面设置
+        // 所以这里的 value 单独放在后面设置(先设置完其他属性,再设置 value 属性)
         if (key !== 'value' && !isReservedProp(key)) {
           hostPatchProp(el, key, null, props[key], namespace, parentComponent)
         }
@@ -688,6 +696,12 @@ function baseCreateRenderer(
        * the properties affects are so finite it is worth special casing it
        * here to reduce the complexity. (Special casing it also should not
        * affect non-DOM renderers)
+       * 设置 DOM 元素值的特殊情况：
+       * - 它可能对顺序敏感（例如：需要在设置 min/max 之后设置，参见 #2325, #4024）
+       * - 它需要被强制设置（参见 #1471）
+       * #2353 提议添加另一个渲染器选项来配置这个行为，
+       * 但是由于这些属性影响范围非常有限，在这里特殊处理以减少复杂性是值得的。
+       * （特殊处理也不应该影响非 DOM 渲染器）
        */
       if ('value' in props) {
         hostPatchProp(el, 'value', null, props.value, namespace)
@@ -756,6 +770,9 @@ function baseCreateRenderer(
           (subTree.ssContent === vnode || subTree.ssFallback === vnode))
       ) {
         const parentVNode = parentComponent.vnode
+        // 有 parent, 当前 el 设置为 parentVNode.scopeId, 设置为当前元素为父级的 scopeId
+        // 一直设置为最顶层的 parentVNode.scopeId, 递归往上查找 parentVNode.scopeId, 让其设置到当前的
+        // 子 vnode 的 el 上, 使其在父级的作用域中
         setScopeId(
           el,
           parentVNode,
@@ -812,6 +829,10 @@ function baseCreateRenderer(
     let { patchFlag, dynamicChildren, dirs } = n2
     // #1426 take the old vnode's patch flag into account since user may clone a
     // compiler-generated vnode, which de-opts to FULL_PROPS
+    // 考虑旧虚拟节点（vnode）的补丁标志（patch flag），因为用户可能会克隆一个由编译器生成的虚拟节点，
+    // 而这种情况下会退化为 FULL_PROPS 选项（即采用全属性处理方式）
+    // 若果 n1.patchFlag = 0, 则 n1.patchFlag & PatchFlags.FULL_PROPS = 0
+    // patchFlag = patchFlag | (n1.patchFlag & PatchFlags.FULL_PROPS)
     patchFlag |= n1.patchFlag & PatchFlags.FULL_PROPS
     const oldProps = n1.props || EMPTY_OBJ
     const newProps = n2.props || EMPTY_OBJ
@@ -1354,6 +1375,7 @@ function baseCreateRenderer(
           if (__DEV__) {
             startMeasure(instance, `render`)
           }
+          // 调用 render 函数创建 vnode (这期间会捕获 currentRenderingInstance) 处理设置到模板中的 ref
           const subTree = (instance.subTree = renderComponentRoot(instance))
           if (__DEV__) {
             endMeasure(instance, `render`)
@@ -1366,10 +1388,12 @@ function baseCreateRenderer(
             subTree,
             container,
             anchor,
-            instance,
+            instance /* parentComponent */,
             parentSuspense,
             namespace,
           )
+          // patch 函数内部会创建直接子组件, 这些子组件的创建时的父组件则是这里的组件实例
+          // patch 函数内部最后会调用 setRef() 设置对应的 ref 到父组件中, 这个在父组件的 onMounted() 前面执行
           if (__DEV__) {
             endMeasure(instance, `patch`)
           }

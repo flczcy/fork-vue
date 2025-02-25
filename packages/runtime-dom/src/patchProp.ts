@@ -55,6 +55,7 @@ export const patchProp: DOMRendererOptions['patchProp'] = (
       !el.tagName.includes('-') &&
       (key === 'value' || key === 'checked' || key === 'selected')
     ) {
+      // 这里保证 attrs 属性 value, checked, selected 值与 el.value, el.checked, el.selected 一致
       patchAttr(el, key, nextValue, isSVG, parentComponent, key !== 'value')
     }
   } else if (

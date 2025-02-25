@@ -59,10 +59,14 @@ export function setRef(
 
   const refValue =
     vnode.shapeFlag & ShapeFlags.STATEFUL_COMPONENT
-      ? getComponentPublicInstance(vnode.component!)
-      : vnode.el
+      ? // ref 在组件 vnode 上,返回组件实例
+        getComponentPublicInstance(vnode.component!)
+      : // ref 在元素 vnode 上,返回获取元素
+        vnode.el
+  // isUnmount 参数为 true, 表示在 onmount 中调用
   const value = isUnmount ? null : refValue
 
+  // i: 表示创建 ref 所在的 vnode 那时捕获的组件实例
   const { i: owner, r: ref } = rawRef
   if (__DEV__ && !owner) {
     warn(
@@ -95,6 +99,7 @@ export function setRef(
         }
 
   // dynamic ref changed. unset old ref
+  // 把老的 ref 设置为 null, 使用新的替换
   if (oldRef != null && oldRef !== ref) {
     if (isString(oldRef)) {
       refs[oldRef] = null
@@ -114,6 +119,8 @@ export function setRef(
 
     if (_isString || _isRef) {
       const doSet = () => {
+        // f 为 v-for 循环中的 ref 标识
+        // <li v-for="it of items" ref="items">
         if (rawRef.f) {
           const existing = _isString
             ? canSetSetupRef(ref)
@@ -121,28 +128,34 @@ export function setRef(
               : refs[ref]
             : ref.value
           if (isUnmount) {
+            // 卸载
             isArray(existing) && remove(existing, refValue)
           } else {
             if (!isArray(existing)) {
               if (_isString) {
                 refs[ref] = [refValue]
                 if (canSetSetupRef(ref)) {
+                  // 触发 effect - 放在 nextTick
                   setupState[ref] = refs[ref]
                 }
               } else {
+                // 触发 effect - 放在 nextTick
                 ref.value = [refValue]
                 if (rawRef.k) refs[rawRef.k] = ref.value
               }
             } else if (!existing.includes(refValue)) {
+              // 这里若是在 setupState 则是响应式的
               existing.push(refValue)
             }
           }
         } else if (_isString) {
           refs[ref] = value
           if (canSetSetupRef(ref)) {
+            // 触发 effect
             setupState[ref] = value
           }
         } else if (_isRef) {
+          // 触发 effect
           ref.value = value
           if (rawRef.k) refs[rawRef.k] = value
         } else if (__DEV__) {

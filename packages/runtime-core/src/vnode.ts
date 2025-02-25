@@ -179,6 +179,8 @@ export interface VNode<
   /**
    * SFC only. This is assigned on vnode creation using currentScopeId
    * which is set alongside currentRenderingInstance.
+   * 仅适用于单文件组件（SFC）。这是在虚拟节点（vnode）创建时使用 currentScopeId 进行赋值的，
+   * currentScopeId 是与 currentRenderingInstance 一同设置的。
    */
   scopeId: string | null
   /**
@@ -434,6 +436,22 @@ const createVNodeWithArgsTransform = (
 const normalizeKey = ({ key }: VNodeProps): VNode['key'] =>
   key != null ? key : null
 
+// <input ref="input">
+// <ul>
+//   <li v-for="item in list" ref="items" key="item.id">
+//     {{ item }}
+//   </li>
+// </ul>
+// _createElementVNode("input", { ref: "input" }, null, 512 /* NEED_PATCH */),
+// _createElementVNode("ul", null, [
+//   (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.list, (item) => {
+//     return (_openBlock(), _createElementBlock("li", {
+//       ref_for: true,
+//       ref: "items",
+//       key: "item.id"
+//     }, _toDisplayString(item), 513 /* TEXT, NEED_PATCH */))
+//   }), 256 /* UNKEYED_FRAGMENT */))
+// ])
 const normalizeRef = ({
   ref,
   ref_key,
@@ -442,11 +460,16 @@ const normalizeRef = ({
   if (typeof ref === 'number') {
     ref = '' + ref
   }
+  // ref_key : 在编译阶段生成的唯一标识符，用于区分同一个父节点下的多个 ref，确保在更新过程中正确地识别和处理这些
   return (
     ref != null
       ? isString(ref) || isRef(ref) || isFunction(ref)
-        ? { i: currentRenderingInstance, r: ref, k: ref_key, f: !!ref_for }
-        : ref
+        ? // // ref 若是存在, 说明一定是在组件中, 这里的 currentRenderingInstance 应该是渲染 ref 所在目标的
+          // // 父组件, 因为是从父组件中获取子组件的实例的, 所以一定是在组件实例中
+          // // 此时这里是创建 vnode 阶段, 还不是 patch, 所以这里的 currentRenderingInstance 一定是父组件实例
+          // // 因为此时的 patch 还没有调用, 属于是创建 subTree 的过程中
+          { i: currentRenderingInstance, r: ref, k: ref_key, f: !!ref_for }
+        : ref // 上面判断不是字符串,不是ref,不是函数,那么这里可以是数组
       : null
   ) as any
 }

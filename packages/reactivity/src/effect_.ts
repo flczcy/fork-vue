@@ -144,13 +144,6 @@ export class ReactiveEffect<T = any>
       this.flags & EffectFlags.RUNNING &&
       !(this.flags & EffectFlags.ALLOW_RECURSE)
     ) {
-      // 当在用户函数 this.fn() 中设置值时, 执行到此处 此时的 EffectFlags.RUNNING 为 true
-      // 在不启用 ALLOW_RECURSE 这里直接返回了 导致不会执行 batch(this), 从而导致 batchedSub 为 undfined
-      // 因为在执行 this.fn() 前, batchedSub 为 undfined, 或者在 endBatch 中在执行 this.fn 前,
-      // 将 batchedSub 值设置为 undefined 了, 而在 this.fn() 中设置值, 执行到这里判断
-      // EffectFlags.RUNNING 为 true, 从而不去设置 batchedSub 导致 endBatch 中不会再次执行 this.fn,
-      // 这样则避免了无限递归循环问题
-      //
       return
     }
     if (!(this.flags & EffectFlags.NOTIFIED)) {
@@ -350,9 +343,26 @@ function prepareDeps(sub: Subscriber) {
     // 这是因为 link.dep 是同一个, 但是在不同 sub 中执行, 当执行完后一个 sub 后, 其 link.dep.activeLink 指向的则是当前执行的sub中link
     // 当 link.dep 在其他的 sub 中执行时, 应该把 link.dep.activeLink 设置为当前 sub 中创建的那个 link
     // 执行 sub 中的那个 link
+    // effect() {
+    //   // 以下注意, 只有 dep 是不变的, dep.activeLink 在不同的 sub 中是不断变化的
+    //   // link(dep, sub) 是有 dep, sub 决定的, 只有 dep, sub 都相同时, 才是同一个 link
+    //   // dep 相同, sub 不同, 则不是同一个 link,
+    //   dep.link1 -> link1.dep.activeLink = link1
+    //   effect() {
+    //     // 先保存 dep 上次的 activeLink
+    //     // link2.prevActiveLink = link2.dep.activeLink
+    //     dep.link2 -> link2.dep.activeLink = link2
+    //     // 执行完后需要把 这里列 link2.dep.activeLink = link1
+    //     link2.dep.activeLink = link2.prevActiveLink
+    //   }
+    //   dep.link1()
+    // }
     // store previous active sub if link was being used in another context
     link.prevActiveLink = link.dep.activeLink
     link.dep.activeLink = link
+    // 在 sub 中执行完后, 需要还原回去,用于嵌套
+    // linkk.dep.activeLink = link.prevActiveLink
+    // link.prevActiveLink = undefined
   }
 }
 

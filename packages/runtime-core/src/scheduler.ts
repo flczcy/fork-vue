@@ -12,6 +12,21 @@ export enum SchedulerJobFlags {
    * By default, a job cannot trigger itself because some built-in method calls,
    * e.g. Array.prototype.push actually performs reads as well (#1740) which
    * can lead to confusing infinite loops.
+   * https://github.com/vuejs/core/issues/1740
+     setup() {
+       const price = ref(10);
+       const history = ref<array<string>>([]);
+       const stoprecording = watcheffect(() => {
+         // 这里的 push() 读取长度, 然后操作改变了长度触发 set, 继续执行这里的 effect, 然后有增加长度...
+         history.value.push(`price changed to ${price.value}`);
+       });
+       // stop recording after 3 seconds
+       settimeout(() => {
+         stoprecording();
+       }, 3000);
+       return { price, history };
+     }
+   *
    * The allowed cases are component update functions and watch callbacks.
    * Component update functions may update child component props, which in turn
    * trigger flush: "pre" watch callbacks that mutates state that the parent

@@ -640,6 +640,7 @@ export function createComponentInstance(
     directives: null,
 
     // resolved props and emits options
+    // 这里是定义在组件选项中的 props 注意和传入的 vnode.props 的区分
     propsOptions: normalizePropsOptions(type, appContext),
     emitsOptions: normalizeEmitsOptions(type, appContext),
 

@@ -15,7 +15,14 @@ export function patchDOMProp(
   // This can come from explicit usage of v-html or innerHTML as a prop in render
   if (key === 'innerHTML' || key === 'textContent') {
     // null value case is handled in renderer patchElement before patching
-    // children
+    // children 指的是这里的处理
+    // #9135 innerHTML / textContent unset needs to happen before possible new children mount
+    // if (
+    //   (oldProps.innerHTML && newProps.innerHTML == null) ||
+    //   (oldProps.textContent && newProps.textContent == null)
+    // ) {
+    //   hostSetElementText(el, '')
+    // }
     if (value != null) {
       el[key] = key === 'innerHTML' ? unsafeToTrustedHTML(value) : value
     }
@@ -24,9 +31,15 @@ export function patchDOMProp(
 
   const tag = el.tagName
 
+  // 这里是针对 value 属性的处理
   if (
     key === 'value' &&
     tag !== 'PROGRESS' &&
+    // web components 自定义元素必须是使用 `-` 分割
+    // 自定义元素的名称必须包含至少一个短横线 (-)。这是为了区分自定义元素和内置的HTML元素
+    // customElements.define('mycustomcomponent', MyCustomComponent);
+    // Uncaught SyntaxError: Failed to execute 'define' on 'CustomElementRegistry': "mycustomcomponent" is not a valid custom element name
+
     // custom elements may use _value internally
     !tag.includes('-')
   ) {
@@ -98,7 +111,7 @@ export function patchDOMProp(
   try {
     el[key] = value
   } catch (e: any) {
-    // do not warn if value is auto-coerced from nullish values
+    // do not warn if value is auto-coerced(自动类型转换) from nullish values
     if (__DEV__ && !needRemove) {
       warn(
         `Failed setting prop "${key}" on <${tag.toLowerCase()}>: ` +

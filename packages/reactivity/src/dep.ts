@@ -48,9 +48,12 @@ export class Link {
   prevActiveLink?: Link
 
   constructor(
+    // 这里参数的 public 默认会设置 this.sub = sub, 特别注意这一点,否则会不直观
     public sub: Subscriber,
     public dep: Dep,
   ) {
+    // this.sub = sub
+    // this.dep = dep
     this.version = dep.version
     this.nextDep =
       this.prevDep =
@@ -73,6 +76,11 @@ export class Dep {
 
   /**
    * Doubly linked list representing the subscribing effects (tail)
+   * 一个 Dep 对应多个 sub, 这里的的 subs 是不断变化的
+   * [[dep], [dep], [dep]]
+   *                 |<- sub
+   *  |<-subHead
+   * 指向最后一个引用该 dep 的 sub
    */
   subs?: Link = undefined
 
@@ -99,42 +107,101 @@ export class Dep {
     }
   }
 
+  // NOTE: 运行 track 执行会执行这个函数, this 指向 effect
+  // prepareDeps(this)
   track(debugInfo?: DebuggerEventExtraInfo): Link | undefined {
     if (!activeSub || !shouldTrack || activeSub === this.computed) {
       return
     }
 
+    // // sub1
+    // effect(() => {
+    //   track('foo.bar') // 第一次 get, 创建 dep, 并且执行 dep.track(), 创建 link, dep.activeLink = link
+    //   track('foo.bar') // 第二次 get, 不在重复创建 dep, 但是执行 dep.track() 同一个 dep, 同一个 activeSub 无需更改 dep.activeLink
+    //                    // 同时这里也保证了去掉重复的 dep track
+    // })
+    // // sub2
+    // effect(() => {
+    //   track('foo.bar') // 第三次 get, 不在重复创建 dep. dep.track(), dep.activeLink 不为 undfined, sub 不同了, 此时需要创建新的 link
+    //                    // 作为当前 dep 的 activeLink, 也就是 dep 在不同的 sub 中, 需要创建不同的 link 作为 dep.activeLink
+    //   track('foo.bar') // 第四次 get, dep 已经存在,不重复创建, dep.activeLink,也存在,还是同一个 activeSub, 无需更改 dep.activeLink
+    //                    // 同时这里也保证了去掉重复的 dep track
+    // })
+
     let link = this.activeLink
+    // 若是是新出现的 dep 直接往链表尾部追加
     if (link === undefined || link.sub !== activeSub) {
+      // link === undefined
+      //   -> 表示 dep 第一次被 track
+      // link != undefined && link.sub !== activeSub
+      //   -> 表示 dep 第二次被 track, 但是与第一次不同是在另一个 sub
+      // 以上两种情况, 需要更新 this.activeLink 为新的 link,
+      // 注意 dep 只会在第一次 get 时创建一次,后面 get 不再创建 dep
       link = this.activeLink = new Link(activeSub, this)
 
       // add the link to the activeEffect as a dep (as tail)
       if (!activeSub.deps) {
+        // [link] 若是activeSub.deps不存在说明是初始执行,此时设置 deps, depsTail 都指向同一个 link
         activeSub.deps = activeSub.depsTail = link
       } else {
+        // 后面 activeSub.deps 设置了值,之后的其他 dep
+        // [link1, link2, link]
+        // link.prevDep -> link2(也就是尾部, link2 正好是链表尾部)
         link.prevDep = activeSub.depsTail
+        // link2.nextDep -> 指向当前的 link
+        // [link1, link2, link]
         activeSub.depsTail!.nextDep = link
+        // 更新新的链表尾部
+        // [link1, link2, link]
+        //                 |
         activeSub.depsTail = link
       }
+      // 以上是构建 sub 中的各个 dep 之间的 link 链表 (sub.deps 表示链表 head, sub.depsTail 表示链表 tail)
+      // activeSub 则是 link.sub, 因为创建 link 把 activeSub 传入了
+      // link.sub.deps 执行 第一个 link1, link.sub.depsTail 指向最后一个 link, 这里则是当前的 link
+      // 这里把 link.sub 中的 deps 构建了链表
+      //
+      // link.sub.deps -> head
+      // link.dep.subs -> tail
 
+      // 这里需要把 link.deps 中 subs 进行构建链表, 以便后面 dep.set 通过 dep.subs 进行链表查询其对应的 sub 更新
+      // link.dep.subs, link.dep.subHead
       addSub(link)
     } else if (link.version === -1) {
       // reused from last run - already a sub, just sync version
+      // dep.trigger() 中 this.version++
       link.version = this.version
 
       // If this dep has a next, it means it's not at the tail - move it to the
       // tail. This ensures the effect's dep list is in the order they are
       // accessed during evaluation.
+      // [link] 有 nextDep 说明不是最尾部的 link, 则需要执行重新插入排序, 因为前面的 link 可能 在 v-if 中移除
+      // 这里按照读取顺序进行链表插入 [1, 2, 3, 4, 5]
+      // 执行 1, 插入到 末尾 [2,3,4,5,1]
+      // 执行 2, 插入到 末尾 [3,4,5,1,2]
+      // 执行 3, 插入到 末尾 [4,5,1,2,3]
+      // 执行 4, 插入到 末尾 [5,1,2,3,4]
+      // 执行 5, 插入到 末尾 [1,2,3,4,5]
+      // [link,link]
+      // 这里读取中,执行新的链表构建,这将确保get的读取顺序
+      // 注意这里并没有清除不在显示的 dep, 清除不在显示的 dep 在 this.fn() 执行完后在 cleanupDeps 中清除
       if (link.nextDep) {
-        const next = link.nextDep
-        next.prevDep = link.prevDep
+        // link: 1, next: 2
+        // [1,2,3,4,5]
+        const next = link.nextDep // 2
+        next.prevDep = link.prevDep // undefined
         if (link.prevDep) {
           link.prevDep.nextDep = next
         }
 
+        // 把当前的 link 设置到 链表的尾部
+        // 当前 link 的前一个 dep 指向上一个链表的尾部
         link.prevDep = activeSub.depsTail
         link.nextDep = undefined
+        // 5.nextDep = link
         activeSub.depsTail!.nextDep = link
+        // 设置当前链表的尾部指向当前的 link
+        // 这里是一个动态调整的过程
         activeSub.depsTail = link
 
         // this was the head - point to the new head
@@ -164,6 +231,18 @@ export class Dep {
     this.notify(debugInfo)
   }
 
+  // 这里的每一次 set 操作都会执行一次 notify()
+  // foo.value++
+  // foo.value++
+  // foo.value++
+  // 这里设置值多次, 会触发发这里的 notify() 多次, sub1.trigger(), sub2.trigger(), sub3.trigger()
+  // 能够通过 把这里的更新操作放在 startBatch, endBatch 之间, 则只会触发一次
+  // startBatch()
+  //   foo.value++
+  //   foo.value++
+  //   foo.value++
+  // endBatch()
+  // 以上包裹在 startBatch, endBatch 之间, 则只会触发一次
   notify(debugInfo?: DebuggerEventExtraInfo): void {
     startBatch()
     try {
@@ -185,6 +264,15 @@ export class Dep {
         }
       }
       for (let link = this.subs; link; link = link.prevSub) {
+        // [sub1, sub2, sub3]
+        //               | <- 这里是从后往前遍历 dep 最后执行的那个 sub 优先往前通知
+        // batch(sub)
+        //   sub.next = batchedSub
+        //   batchedSub = sub
+        // 这里通知是从子往父级冒泡通知, 构建链表
+        // 最后执行到 sub1 时, batchedSub = sub1, 此时 sub1.next -> sub2.next-> sub3.next -> undefined
+        // 通过这里的 notify() 有构建了一个执行 链表 batchedSub = sub1 -> sub2 -> sub3
+        //
         if (link.sub.notify()) {
           // if notify() returns `true`, this is a computed. Also call notify
           // on its dep - it's called here instead of inside computed's notify
@@ -193,6 +281,8 @@ export class Dep {
         }
       }
     } finally {
+      // 最终在 endBatch() 按照 batchedSub = sub1 -> sub2 -> sub3 这个顺序
+      // 逐个执行 sub1.trigger(), sub2.trigger(), sub3.trigger()
       endBatch()
     }
   }
@@ -210,17 +300,26 @@ function addSub(link: Link) {
         addSub(l)
       }
     }
-
-    const currentTail = link.dep.subs
+    // subs: [link]
+    // subs: [link1, link2, link]
+    const currentTail = link.dep.subs // undefined or link2
     if (currentTail !== link) {
+      // link2 !== link
+      // [link1, link2, link]
+      //           |<-  .prevSub
       link.prevSub = currentTail
+      // [link1, link2,      link]
+      //         .nextSub -> |
       if (currentTail) currentTail.nextSub = link
     }
 
     if (__DEV__ && link.dep.subsHead === undefined) {
+      // subHead 只会被赋值一次, 因为一个 dep 对应的第一个 sub 是不会变化的, 但是这个 dep 还会有第 2, 3, ...个 sub
+      // 所以 dep 所对应的 subs(tail) 尾部是不断变化的
       link.dep.subsHead = link
     }
 
+    // 该 link 的 dep 对应的 sub 指向最后一个 sub
     link.dep.subs = link
   }
 }
