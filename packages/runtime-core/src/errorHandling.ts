@@ -74,6 +74,8 @@ export function callWithErrorHandling(
   args?: unknown[],
 ): any {
   try {
+    // 这里的 try - catch 捕获不了异步函数的错误, 所以需要在 callWithAsyncErrorHandling 中处理
+    // 因为本质上异步函数的错误,是在异步队列中触发的,不是在 try { ... } 中触发的, 所以 try catch
     return args ? fn(...args) : fn()
   } catch (err) {
     handleError(err, instance, type)

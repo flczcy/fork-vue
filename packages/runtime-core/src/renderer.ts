@@ -385,6 +385,9 @@ function baseCreateRenderer(
       return
     }
 
+    // _createCommentVNode("v-if", true) -> v-if 为 false, 会创建一个空的 vnode
+    // 所以不会出现 patch(n1, null), 即使 v-if 为 false, 这里的 n2 也会是一个空的不同类型的 vnode
+
     // patching & not same type, unmount old tree
     if (n1 && !isSameVNodeType(n1, n2)) {
       anchor = getNextHostNode(n1)
@@ -2310,6 +2313,7 @@ function baseCreateRenderer(
     if (job) {
       // so that scheduler will no longer invoke it
       job.flags! |= SchedulerJobFlags.DISPOSED
+      // 这里表明是先执行子组件的卸载流程, 后执行父组件的卸载流程
       unmount(subTree, instance, parentSuspense, doRemove)
     }
     // unmounted hook

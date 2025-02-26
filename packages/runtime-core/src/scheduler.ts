@@ -68,6 +68,7 @@ let currentFlushPromise: Promise<void> | null = null
 const RECURSION_LIMIT = 100
 type CountMap = Map<SchedulerJob, number>
 
+// 当 nextTick 被作为点调用时, 或者 nextTick.call(instance) 此时的 nextTick 中的 this 则是有值
 export function nextTick<T = void, R = void>(
   this: T,
   fn?: (this: T) => R,
@@ -76,8 +77,15 @@ export function nextTick<T = void, R = void>(
   return fn ? p.then(this ? fn.bind(this) : fn) : p
 }
 
-// Use binary-search to find a suitable position in the queue. The queue needs
-// to be sorted in increasing order of the job ids. This ensures that:
+// 二分查找,必须是顺序的
+// _createCommentVNode("v-if", true) -> v-if 为 false, 会创建一个空的 vnode
+// 2. 来自 parent 的更新, parent 更新函数执行 patch(childOld, Comment) - 表示 unmount
+//    此时 child 组件直接卸载掉, 而 child 中 dep.set 出发的 update 函数可能还在队列中
+//    在执行 patch(childOld, null) 中, 执行 unmount 函数中应该移除 队列中的 child.update 函数
+//    packages/runtime-core/src/renderer.ts, 这里卸载时将队列中标识置为 DISPOSED, 后面在执行队列 flush 时
+//    unmountComponent: job.flags! |= SchedulerJobFlags.DISPOSED
+//    跳过该函数的执行
+// Use binary-search to find a suitable position in the queue. The queue needs // to be sorted in increasing order of the job ids. This ensures that:
 // 1. Components are updated from parent to child. As the parent is always
 //    created before the child it will always have a smaller id.
 // 2. If a component is unmounted during a parent component's update, its update
@@ -85,10 +93,17 @@ export function nextTick<T = void, R = void>(
 // A pre watcher will have the same id as its component's update job. The
 // watcher should be inserted immediately before the update job. This allows
 // watchers to be skipped if the component is unmounted by the parent update.
+
+// 查找按顺序插入
+// 若是相同则插入在前面
+// 但是有 PRE 标识的则插入在后面
 function findInsertionIndex(id: number) {
   let start = flushIndex + 1
+  // 为何这里不是 queue.length - 1 ? 也可以,实现细节不同而已
+  // 实现参考: https://github.com/flczcy/devtips/issues/326
   let end = queue.length
 
+  // NOTE: 这里二分查找的 start 位置不一定要从 0 起始, 这里的 start 是变化的
   while (start < end) {
     const middle = (start + end) >>> 1
     const middleJob = queue[middle]
@@ -97,8 +112,36 @@ function findInsertionIndex(id: number) {
       middleJobId < id ||
       (middleJobId === id && middleJob.flags! & SchedulerJobFlags.PRE)
     ) {
+      // 要查找的 id 在中间值的右边
+      // id = 4, 相等并且是 有 PRE 标识, 则插入在后面
+      // [1, 2, 3] - [4, 5, 6]
+      //                 insertIndex
+      // id = 4
+      // [1, 2, 3, 4, 5, 6]
+      // [1, 2, 3] - [4, 5, 6]
+      // start = 0, end = 6, middle = 3, job = 4 job = 4
+      // start = 4, end = 6, middle = 5, job = 6 job > 4
+      // start = 4, end = 5, middle = 4, job = 5 job > 4
+      // start = 4, end = 4
+      // return 4
+      //
+      // [1, 2, 3, 4, 4', 5, 6]
       start = middle + 1
+      // start 4, end 6
+      //
     } else {
+      // id = 4
+      // [1, 2, 3, 4, 5, 6]
+      // [1, 2, 3] - [4, 5, 6]
+      // start = 0, end = 6, middle = 3, job = 4 job = 4
+      // start = 0, end = 3, middle = 1, job = 2 job < 4
+      // start = 2, end = 3, middle = 2, job = 3 job < 4
+      // start = 3, end = 3
+      // return 3
+      // 否则插入到前面
+      // [1, 2, 3] - [4, 5, 6]
+      //              | insertIndex
+      // [1, 2, 3, 4', 4, 5, 6]
       end = middle
     }
   }
@@ -106,17 +149,37 @@ function findInsertionIndex(id: number) {
   return start
 }
 
+// foo.a++ -> queueJob(updateFoo)
+// foo.b++ -> queueJob(updateFoo)
+// foo.c++ -> queueJob(updateFoo)
+// ...
+// bar.a++ -> queueJob(updateBar)
+// bar.b++ -> queueJob(updateBar)
+// bar.c++ -> queueJob(updateBar)
+// ...
+// queue: [updateFoo, updateBar]
+// 在异步的执行 updateFoo 函数中 {
+//   又会注册钩子函数到 pendingPostFlushCbs 中, 以等待 uddateFoo 等 queue 中的 job 执行完后再执行
+//   queuePostFlushCb(hookFn)
+// }
+
 export function queueJob(job: SchedulerJob): void {
+  // QUEUED 标识的任务已经被插入到队列中了, 不需要再次插入
   if (!(job.flags! & SchedulerJobFlags.QUEUED)) {
     const jobId = getId(job)
     const lastJob = queue[queue.length - 1]
     if (
       !lastJob ||
       // fast path when the job id is larger than the tail
+      // fast path 种类可以理解为代码最优化执行路径, 其实就是优化代码执行
+      // fast path 就是对代码的执行路径优化(代码有多种执行路径: 快速执行路径, 慢速执行路径, hot path, cold path)
+      // 执行快速的路径就称之为 fast path
+      // 代码术语种还有 hot path, cold path, slow path, fast path
       (!(job.flags! & SchedulerJobFlags.PRE) && jobId >= getId(lastJob))
     ) {
       queue.push(job)
     } else {
+      // slow path
       queue.splice(findInsertionIndex(jobId), 0, job)
     }
 
@@ -128,12 +191,16 @@ export function queueJob(job: SchedulerJob): void {
 
 function queueFlush() {
   if (!currentFlushPromise) {
+    // 第一次一个同步操作, 注册一个异步回调函数函数等待同步操作结束
+    // 第二次, 3, 4, 的同步操作通过 currentFlushPromise 进行拦截, 不再注册异步回调函数
+    // 等所有的同步操作执行完后, 开始执行异步操作 flushJobs
     currentFlushPromise = resolvedPromise.then(flushJobs)
   }
 }
 
 export function queuePostFlushCb(cb: SchedulerJobs): void {
   if (!isArray(cb)) {
+    // cb 不是数组
     if (activePostFlushCbs && cb.id === -1) {
       activePostFlushCbs.splice(postFlushIndex + 1, 0, cb)
     } else if (!(cb.flags! & SchedulerJobFlags.QUEUED)) {
@@ -141,14 +208,19 @@ export function queuePostFlushCb(cb: SchedulerJobs): void {
       cb.flags! |= SchedulerJobFlags.QUEUED
     }
   } else {
+    // 如果 cb 是一个数组，它是一个组件生命周期钩子，只能由一个已经在主队列中去重的任务触发，
+    // 因此我们可以在这种情况下跳过重复检查以提高性能
     // if cb is an array, it is a component lifecycle hook which can only be
-    // triggered by a job, which is already deduped in the main queue, so
+    // triggered by a job, which is already deduped(去重的) in the main queue, so
     // we can skip duplicate check here to improve perf
+    // 也就是说调用 queuePostFlushCb 函数执行到这里, 说明 queuePostFlushCb 是由 queue 中的 job 触发的
+    // 在 queue 中的 job (组件更新函数) 在处理生命周期钩子时 push 到数组时, 已经去重了, 所以我们可以跳过重复检查
     pendingPostFlushCbs.push(...cb)
   }
   queueFlush()
 }
 
+// 执行 queue 中的 带有 PRE 标识的 job, 执行完后从队列中移除该函数
 export function flushPreFlushCbs(
   instance?: ComponentInternalInstance,
   seen?: CountMap,
@@ -182,6 +254,7 @@ export function flushPreFlushCbs(
 
 export function flushPostFlushCbs(seen?: CountMap): void {
   if (pendingPostFlushCbs.length) {
+    // 去重排序
     const deduped = [...new Set(pendingPostFlushCbs)].sort(
       (a, b) => getId(a) - getId(b),
     )
@@ -189,6 +262,12 @@ export function flushPostFlushCbs(seen?: CountMap): void {
 
     // #1947 already has active queue, nested flushPostFlushCbs call
     if (activePostFlushCbs) {
+      // 递归调用直接返回, 避免循环递归,
+      // cb() { flushPostFlushCbs(cb) }
+      // 进入到这里说明 pendingPostFlushCbs.length > 0, 又有新的 cb 被注册到 pendingPostFlushCbs 中
+      // 因为之前进入后, pendingPostFlushCbs.length = 0 已被设置为 0, 若是再次调用 flushPostFlushCbs
+      // 进入到这里, 说明 pendingPostFlushCbs 中有被注册值, 若是没有值, 则不会执行到这里
+      // 所以这里需要将其 push 到 activePostFlushCbs 中
       activePostFlushCbs.push(...deduped)
       return
     }
@@ -210,7 +289,9 @@ export function flushPostFlushCbs(seen?: CountMap): void {
       if (cb.flags! & SchedulerJobFlags.ALLOW_RECURSE) {
         cb.flags! &= ~SchedulerJobFlags.QUEUED
       }
+      // 若是没有 DISPOSED 标识, 则执行 cb
       if (!(cb.flags! & SchedulerJobFlags.DISPOSED)) cb()
+      // 执行完后,去掉 QUEUED 标识
       cb.flags! &= ~SchedulerJobFlags.QUEUED
     }
     activePostFlushCbs = null
@@ -223,33 +304,64 @@ const getId = (job: SchedulerJob): number =>
 
 function flushJobs(seen?: CountMap) {
   if (__DEV__) {
+    // 这里只需要在开发环境给 seen 赋值即可, 产品环境不会调用 checkRecursiveUpdates(seen) 函数
+    // 所以在开发环境中, seen 是一定有值的
     seen = seen || new Map()
   }
 
+  // must be determined out of 必须从...之外来决定”
   // conditional usage of checkRecursiveUpdate must be determined out of
   // try ... catch block since Rollup by default de-optimizes treeshaking
   // inside try-catch. This can leave all warning code unshaked. Although
   // they would get eventually shaken by a minifier like terser, some minifiers
   // would fail to do that (e.g. https://github.com/evanw/esbuild/issues/1610)
+  // 必须在 try...catch 块之外确定 checkRecursiveUpdate 的条件使用，
+  // 因为 Rollup 默认会对 try...catch 块内的代码进行反优化（de-optimize），
+  //  然而，Rollup 默认会对 try...catch 块内的代码进行反优化，这意味着即使这些代码在某些条件下不会被执行，
+  //  它们也不会被 tree shaking 掉。
+  // 这会导致所有警告代码无法被 tree shaking。尽管这些代码最终会被像 terser 这样的压缩工具
+  // 摇树（shake）掉，但有些压缩工具可能会失败（例如：https://github.com/evanw/esbuild/issues/1610）
   const check = __DEV__
     ? (job: SchedulerJob) => checkRecursiveUpdates(seen!, job)
     : NOOP
 
   try {
+    // NOTE:这里的 flushIndex 是全局变量, 但是每一次调用执行本函数到这里的for中,会将 flushIndex 重置为 0
+    // 这里的 queue.length 是实时读取了,若是 job() 添加了任务, 则 queue.length 反应到这里
+    // 比如执行 到 flushIndex = 3 是, 摸个 job 函数内部 queueJob(job) 插入了一个新的 job
+    // 注意此时 是从 flushIndex 当值开始插入, 应为 flushIndex 是全局变量, 在 queueJob 中读取 flushIndex
+    // [1, 2, 3, 4, 5, 6]
+    //        |
+    //        flushIndex = 3
+    //        |[3, 4, 5, 6] 后面进行插入, 而不会插入到 3 的前面
+    // 同时要注意插入的新的 job 的 id 一定是大于或者等于当前 job 的 id
+    // 因为子函数在父函数后面执行, 后面执行的函数的 id 大于等于前面的函数的 id
+    // 若是设置 ALLOW_RECURSE, 则可以在执行 job 时, 插入自己本身到 queue 中
     for (flushIndex = 0; flushIndex < queue.length; flushIndex++) {
       const job = queue[flushIndex]
       if (job && !(job.flags! & SchedulerJobFlags.DISPOSED)) {
+        // checkRecursiveUpdates 给这里的 job 函数执行计数, 若是执行超过次数后,
+        // 开发环境中这里直接返回不在进行计数了, 但是会提示递归执行警告
+        // 提前 continue, 结束无限递归执行, 这里只是在开发环境中启用, 不在生产环境中使用
+        // 生成环境则会无限递归执行
         if (__DEV__ && check(job)) {
           continue
         }
         if (job.flags! & SchedulerJobFlags.ALLOW_RECURSE) {
+          // 若是这里 job 函数允许递归(自己调用自己)执行, 则去掉 QUEUED 标识
+          // 以便让 job() 函数中继续调用 job() 函数自己
+          // job() {
+          //   job() // 递归调用
+          // }
           job.flags! &= ~SchedulerJobFlags.QUEUED
         }
+        // job() 此处执行 job() 函数
         callWithErrorHandling(
           job,
           job.i,
           job.i ? ErrorCodes.COMPONENT_UPDATE : ErrorCodes.SCHEDULER,
         )
+        // 这里 job 执行完毕了, 不允许递归调用, 去掉 QUEUED 标识
         if (!(job.flags! & SchedulerJobFlags.ALLOW_RECURSE)) {
           job.flags! &= ~SchedulerJobFlags.QUEUED
         }
@@ -258,20 +370,44 @@ function flushJobs(seen?: CountMap) {
   } finally {
     // If there was an error we still need to clear the QUEUED flags
     for (; flushIndex < queue.length; flushIndex++) {
+      // 若是执行到这里的 for 循环中, 说明上面的 for 循环执行被中断了
+      // 上面的 for 循环执行完后, 理论上(不出现错误)的情况下, flushIndex == queue.length,
+      // 除非错误中断了 for 循环, 最终执行到 finally 中, 此时可能 flushIndex 小于 queue.length,
       const job = queue[flushIndex]
       if (job) {
+        // 因为出错了, 这里清空 QUEUED 标识, 同时需要清空 queue.length = 0
+        // 这里不能先清空 queue.length = 0, 若是先清空 queue.length = 0,
+        // 则不能清空其他 job 函数的 QUEUED 标识,
         job.flags! &= ~SchedulerJobFlags.QUEUED
       }
     }
 
+    // 这里不管有无出错,最终都会执行到这里
+    // 此时说明 queue 中任务都执行完毕了, 即使出错也当做执行完毕
+    // 注意 queue 中的 任务都是 组件的 effect 更新函数
     flushIndex = -1
     queue.length = 0
 
+    // 以上 queue 中的任务(组件effect update 函数)都执行完毕
+    // 此时开始执行 postFlushCbs 就是组件注册的钩子函数放在组件的更新函数执行完后执行
     flushPostFlushCbs(seen)
 
+    // currentFlushPromise = resolvedPromise.then(flushJobs)
+    //   queue.job()
+    //   pendingPostFlushCbs.job()
+    //   这些任务执行都是在 currentFlushPromise 上下文中
+    //   组件的 effect 更新函数中 可以访问到 currentFlushPromise
+    //   组件的 hooks  中可以访问到 currentFlushPromise
+    //   比如组件的 onMounted(){ nextTick() }
+    //   这里的 nextTick 函数内部会调用 resolvedPromise.then(flushJobs) }
+    // currentFlushPromise = nulli
+
     currentFlushPromise = null
+    // 这里的 queue.length > 0 只有可能是在 flushPostFlushCbs(seen)中 添加了任务
+    // 因为执行 flushPostFlushCbs(seen)前, 清空了 queue.length = 0
     // If new jobs have been added to either queue, keep flushing
     if (queue.length || pendingPostFlushCbs.length) {
+      // 前面的 currentFlushPromise 置为了 null
       flushJobs(seen)
     }
   }
