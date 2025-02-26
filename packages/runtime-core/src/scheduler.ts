@@ -98,6 +98,15 @@ export function nextTick<T = void, R = void>(
 // 若是相同则插入在前面
 // 但是有 PRE 标识的则插入在后面
 function findInsertionIndex(id: number) {
+  // 这里 start = flushIndex + 1 是为了跳过当执行的 job, 从下一个开始查找插入
+  // const job1 = () => {
+  //   calls.push('job1')
+  //   这里 queueJob() 在 job1 内部嵌套调用，在执行 findInsertionIndex 时的 start 应该+1 跳过当前的 job
+  //   [job1], 应该从 1 开始，不应该从 0 开始，若是 从 0 开始，就会插入正在执行的 job1 的前面
+  //   queueJob(job2)
+  //   queueJob(job3)
+  // }
+  // queueJob(job1)
   let start = flushIndex + 1
   // 为何这里不是 queue.length - 1 ? 也可以,实现细节不同而已
   // 实现参考: https://github.com/flczcy/devtips/issues/326
@@ -107,13 +116,19 @@ function findInsertionIndex(id: number) {
   while (start < end) {
     const middle = (start + end) >>> 1
     const middleJob = queue[middle]
-    const middleJobId = getId(middleJob)
+    const middleJobId = getId(middleJob) // job.id 不存在则为 Infinity
+    // Infinity === Infinity -> true
     if (
       middleJobId < id ||
       (middleJobId === id && middleJob.flags! & SchedulerJobFlags.PRE)
     ) {
       // 要查找的 id 在中间值的右边
-      // id = 4, 相等并且是 有 PRE 标识, 则插入在后面
+      // 要插入的 id > 中间值 id 或者
+      // 要插入的 id = 中间值 id, 同时 中间值有 PRE 标记，则插在 PRE 标记的右边
+      // 这里保证插入的 id 与 PRE 的 id 相等时，总是插在 PRE 右边，保证 PRE 在插入的 id 前面
+      // 其他相等的情况则统一插在中间值的左边
+      // NOTE: 注意这里是判断中间值的 PRE, 不是判断插入进来的 job 是否有 PRE
+      // id = 4',
       // [1, 2, 3] - [4, 5, 6]
       //                 insertIndex
       // id = 4
@@ -125,12 +140,12 @@ function findInsertionIndex(id: number) {
       // start = 4, end = 4
       // return 4
       //
-      // [1, 2, 3, 4, 4', 5, 6]
+      // [1, 2, 3, 4(PRE), 4', 5, 6]
       start = middle + 1
       // start 4, end 6
       //
     } else {
-      // id = 4
+      // id = 4'
       // [1, 2, 3, 4, 5, 6]
       // [1, 2, 3] - [4, 5, 6]
       // start = 0, end = 6, middle = 3, job = 4 job = 4
@@ -166,7 +181,7 @@ function findInsertionIndex(id: number) {
 export function queueJob(job: SchedulerJob): void {
   // QUEUED 标识的任务已经被插入到队列中了, 不需要再次插入
   if (!(job.flags! & SchedulerJobFlags.QUEUED)) {
-    const jobId = getId(job)
+    const jobId = getId(job) // getId 中处理若是 job.id 不存在, 这里返回 Infinity
     const lastJob = queue[queue.length - 1]
     if (
       !lastJob ||
@@ -174,9 +189,13 @@ export function queueJob(job: SchedulerJob): void {
       // fast path 种类可以理解为代码最优化执行路径, 其实就是优化代码执行
       // fast path 就是对代码的执行路径优化(代码有多种执行路径: 快速执行路径, 慢速执行路径, hot path, cold path)
       // 执行快速的路径就称之为 fast path
-      // 代码术语种还有 hot path, cold path, slow path, fast path
+      // 代码术语还有 hot path, cold path, slow path, fast path
       (!(job.flags! & SchedulerJobFlags.PRE) && jobId >= getId(lastJob))
     ) {
+      // 若是要插入的 id 大于或者等于队列最后一个，此时直接 push 到队列最后
+      // 特别注意这里相等的情况(等于队列中最后一个，直接插入到队列最后面，不经过下面的二分查找插入)
+      // 注意这里相等，若是使用下面的二分查找插入，则会插入到最后一个的前面，即倒数第 2 个而不是最后一个
+      // 这里相等时的插入与下面的 二分查找插入 是有区分的
       queue.push(job)
     } else {
       // slow path
@@ -194,6 +213,8 @@ function queueFlush() {
     // 第一次一个同步操作, 注册一个异步回调函数函数等待同步操作结束
     // 第二次, 3, 4, 的同步操作通过 currentFlushPromise 进行拦截, 不再注册异步回调函数
     // 等所有的同步操作执行完后, 开始执行异步操作 flushJobs
+    // 这里的 currentFlushPromise 的resolve 要等到 flushJobs 执行完后才 resolve
+    // 也就是 currentFlushPromise.then(fn) 中的 fn 要等到 flushJobs 执行完后才会执行
     currentFlushPromise = resolvedPromise.then(flushJobs)
   }
 }
@@ -339,6 +360,7 @@ function flushJobs(seen?: CountMap) {
     // 若是设置 ALLOW_RECURSE, 则可以在执行 job 时, 插入自己本身到 queue 中
     for (flushIndex = 0; flushIndex < queue.length; flushIndex++) {
       const job = queue[flushIndex]
+      // job 没有 DISPOSED 标识, 表示没有被废弃
       if (job && !(job.flags! & SchedulerJobFlags.DISPOSED)) {
         // checkRecursiveUpdates 给这里的 job 函数执行计数, 若是执行超过次数后,
         // 开发环境中这里直接返回不在进行计数了, 但是会提示递归执行警告

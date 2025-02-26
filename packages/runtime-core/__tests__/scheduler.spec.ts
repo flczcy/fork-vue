@@ -46,17 +46,28 @@ describe('scheduler', () => {
 
     it("should insert jobs in ascending order of job's id when flushing", async () => {
       const calls: string[] = []
+      // 每一个 job 函数执行时都有对应的 flushIndex
       const job1 = () => {
         calls.push('job1')
-
+        //  当前执行的 job1 对应的 flushIndex = 0
         queueJob(job2)
         queueJob(job3)
       }
+      // 这里没有 job.id 的，则内部读取为 id 为 Infinity
+
+      // [job1]
+      // flushIndex = 0，跳过当前执行的 job1, 从 flushIndex + 1, 下一个开始查找插入
+      // [job1, job2]
+      // [job1, job3, job2] job3.id < job2.id, 故 job3 插入在 job2 前面
+      // 执行 job2 后，由于在 job2 中嵌套追加 job4, job5, 此时这些追加的 job 也应该是放入到 当前正在执行的
+      // job2 的后面 从 job2 后面的索引开始 二分查找插入，总之不能插入当前正在执行的 job 前面，从下一个开始进行
+      // 二分查找插入
 
       const job2 = () => {
         calls.push('job2')
-        queueJob(job4)
-        queueJob(job5)
+        // 当前执行的 job2 对应的 flushIndex = 2
+        queueJob(job4) // job4.id >= queue.lastJob.id(10), 此种情况直接 push(job4) [job1, job3, job2, job4]
+        queueJob(job5) // job5.id >= queue.lastJob.id(Infinity) 此种情况直接 push(job5) [job1, job3, job2, job4, job5]
       }
       job2.id = 10
 
@@ -73,10 +84,12 @@ describe('scheduler', () => {
         calls.push('job5')
       }
 
+      // queueJob 执行时内部设置：currentFlushPromise = Promise.resolve().then(flushJobs)
       queueJob(job1)
 
       expect(calls).toEqual([])
-      await nextTick()
+      // NOTE: nextTick 执行
+      await nextTick() // await currentFlushPromise
       expect(calls).toEqual(['job1', 'job3', 'job2', 'job4', 'job5'])
     })
 
@@ -151,6 +164,8 @@ describe('scheduler', () => {
       const cb2: SchedulerJob = () => {
         calls.push('cb2')
       }
+      // 若是没有这个 PRE 则直接 push 到最后，因为与之前队列中的最后一个job1 id 相同
+      // 但由于是 PRE, 所以使用 二分查找插入到 job1 前面
       cb2.flags! |= SchedulerJobFlags.PRE
       cb2.id = 1
 
@@ -165,6 +180,7 @@ describe('scheduler', () => {
       expect(calls).toEqual(['cb1', 'cb2', 'cb3', 'job1'])
     })
 
+    // id 相同的应该插入在 pre job 的后面
     it('should insert jobs after pre jobs with the same id', async () => {
       const calls: string[] = []
       const job1: SchedulerJob = () => {
@@ -199,12 +215,21 @@ describe('scheduler', () => {
       job6.id = 2
       job6.flags! |= SchedulerJobFlags.PRE
 
+      // 我们需要多个任务来进行恰当的测试，否则
+      // `findInsertionIndex` 函数可能会偶然得到正确的插入索引。
       // We need several jobs to test this properly, otherwise
       // findInsertionIndex can yield the correct index by chance
-      queueJob(job4)
-      queueJob(job2)
-      queueJob(job3)
-      queueJob(job1)
+      queueJob(job4) // [job4.3]
+      queueJob(job2) // [job2.2, job4.3] -> job2,job3 id 相等同时job2为PRE, 需要将job3插在job2后
+      queueJob(job3) // [job2.2, job3.2, job4.3]
+      queueJob(job1) // [job1.1, job2.2, job3.2, job4.3]
+      //                          |
+      //                         flushIndex = 1 -> 执行 job2 时，queueJob(job5.2)，queueJob(job6.2)
+      //                [job1.1, job2.2, job3.2, job4.3]
+      // 跳过当前 job2 索引，从下个索引开始插入 start = 2, end = 4，queueJob(job5.2)
+      // 由于 job3.2 为 PRE, 所以 job5.2 只能插在其后 [job1.1, job2.2, job3.2, job5.2, job4.3]
+      // start = 2, end = 5，queueJob(job6.2), id 为 2，但是 job5.2 不是 PRE, 所以插入在 job5.2 前面
+      // [job1.1, job2.2, job3.2, job6.2, job5.2, job4.3]
 
       await nextTick()
       expect(calls).toEqual(['job1', 'job2', 'job3', 'job6', 'job5', 'job4'])
@@ -218,13 +243,18 @@ describe('scheduler', () => {
         // directly inside `updateComponentPreRender` to avoid non atomic
         // cb triggers (#1763)
         queueJob(cb1)
-        queueJob(cb2)
+        queueJob(cb2) // [job1, cb1, cb2] cb1 是 PRE 所以 cb2 插入在 cb1 后
+        // flushIndex = 0
+        // i = flushIndex + 1 -> [cb1, cb2]
         flushPreFlushCbs()
+        // cb1() -> [job1, cb2]
+        // cb2() -> [job1]
         calls.push('job1')
       }
       const cb1: SchedulerJob = () => {
         calls.push('cb1')
         // a cb triggers its parent job, which should be skipped
+        // 此时的 job1 已经设置标识 QUEUED
         queueJob(job1)
       }
       cb1.flags! |= SchedulerJobFlags.PRE
