@@ -275,7 +275,7 @@ describe('scheduler', () => {
         queueJob(job3)
         queueJob(job4)
       }
-      // job1 has no id
+      // job1 has no id 但是有 PRE，那么读取的 id 为 -1
       job1.flags! |= SchedulerJobFlags.PRE
       const job2: SchedulerJob = () => {
         calls.push('job2')
@@ -285,12 +285,12 @@ describe('scheduler', () => {
       const job3: SchedulerJob = () => {
         calls.push('job3')
       }
-      // job3 has no id
+      // job3 has no id 但是有PRE，那么读取的 id 为 -1
       job3.flags! |= SchedulerJobFlags.PRE
       const job4: SchedulerJob = () => {
         calls.push('job4')
       }
-      // job4 has no id
+      // job4 has no id 但是有PRE，那么读取的 id 为 -1
       job4.flags! |= SchedulerJobFlags.PRE
 
       queueJob(job1)

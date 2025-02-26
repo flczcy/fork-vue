@@ -321,6 +321,8 @@ export function flushPostFlushCbs(seen?: CountMap): void {
 }
 
 const getId = (job: SchedulerJob): number =>
+  // 若是没有 id, 但是是有 PRE，那么读取的 id 为 -1，否则返回 Infinity
+  // 这里要注意，有 PRE 标识的 job id 默认值为 -1，而不是 infinite
   job.id == null ? (job.flags! & SchedulerJobFlags.PRE ? -1 : Infinity) : job.id
 
 function flushJobs(seen?: CountMap) {
