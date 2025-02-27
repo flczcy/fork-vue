@@ -282,6 +282,9 @@ export function startBatch(): void {
 //   // ... 执行其他代码
 //   endBatch() { // -- 这里只执行了一次 -- , 而前面有两次 ++ 所有 batchDepth 大于 0
 //     // 这里这里嵌套的 endBatch 不会执行,直接 return 因为 --batchDepth 依然大于 0
+//     startBatch() // ++
+//     batch(sub)
+//     endBatch()
 //   }
 //   // 只有最后一个 endBatch 才会执行
 // endBatch()
