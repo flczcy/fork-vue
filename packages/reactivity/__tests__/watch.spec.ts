@@ -50,14 +50,15 @@ describe('watch', () => {
   })
 
   test('with callback', () => {
-    let dummy: any
+    let dummy: any[] = []
     const source = ref(0)
     watch(source, () => {
-      dummy = source.value
+      dummy.push(source.value)
     })
-    expect(dummy).toBe(undefined)
+    expect(dummy.length).toBe(0)
     source.value++
-    expect(dummy).toBe(1)
+    source.value++
+    expect(dummy.length).toBe(2)
   })
 
   test('call option with error handling', () => {
@@ -74,6 +75,7 @@ describe('watch', () => {
       }
     }
 
+    // vue 内部使用 call 绑定了在 watch 各个函数中可能的出错的类型代码
     watch(
       () => {
         throw 'oops in effect'
@@ -108,6 +110,8 @@ describe('watch', () => {
     ])
 
     effect!.stop()
+    // effect.onStop() -> 调用这里的 cleanups 注册的函数即 onWatcherCleanup 中注入的函数
+    // 内部使用 call 调用捕获错误 清除函数中抛出的错误
     source.value++
     expect(onError.mock.calls.length).toBe(3)
     expect(onError.mock.calls[2]).toMatchObject([

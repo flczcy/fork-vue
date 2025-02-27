@@ -101,6 +101,13 @@ export class Dep {
    */
   sc: number = 0
 
+  // 这里的 dep 居然这里和 computed 耦合在一起了
+  // 注意这里要是传入 new Dep(computed) 说明这个 dep 是属于 computed dep
+  // effect(() => { com.value, foo.bar } ) -> 在 effect 中的依赖中 这个依赖属于 computed 的 dep
+  // 也就是在effect 的 deps 中, dep 分类两类,
+  // 一类为普通的 dep, 比如这里的 foo.bar,
+  // 一类为这里的 com.value 属于 computed 的 dep
+  // dep 分类(普通 dep, 包装 dep 即计算属性dep)
   constructor(public computed?: ComputedRefImpl | undefined) {
     if (__DEV__) {
       this.subsHead = undefined
@@ -277,6 +284,15 @@ export class Dep {
           // if notify() returns `true`, this is a computed. Also call notify
           // on its dep - it's called here instead of inside computed's notify
           // in order to reduce call stack depth.
+          // effect(() => {
+          //   com.value {              | computed.dep.notify() 通知最外层的 effect 进行更新
+          //     return computed(() => {
+          //                            | 通知内部的 computed.notify()
+          //       return ref.value -> 更新了 -> computed.notify() -> computed.dep.notify()
+          //     })
+          //   }
+          // })
+          // 这里的 computed.dep.notify() 是通知外部的 effect() 进行更新
           ;(link.sub as ComputedRefImpl).dep.notify()
         }
       }

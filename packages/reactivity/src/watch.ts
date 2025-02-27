@@ -25,6 +25,10 @@ import { isReactive, isShallow } from './reactive'
 import { type Ref, isRef } from './ref'
 import { getCurrentScope } from './effectScope'
 
+// 在这句话中，“co-location”指的是“共同定位”或“同地放置”。具体到上下文中，
+// 它意味着将某些相关的逻辑或功能放置在同一个地方或模块中，以便于管理和使用。
+// 这里提到将某种基础的观察逻辑（base watch logic）移到与@vue/reactivity相关的地方，
+// 使得它们可以共同定位，从而改善代码的组织结构和使用效率。
 // These errors were transferred from `packages/runtime-core/src/errorHandling.ts`
 // to @vue/reactivity to allow co-location with the moved base watch logic, hence
 // it is essential to keep these values unchanged.
@@ -183,17 +187,28 @@ export function watch(
         if (cleanup) {
           pauseTracking()
           try {
+            // cleanup 用户定义的函数中应该禁止响应式 track/trigger
             cleanup()
           } finally {
             resetTracking()
           }
         }
         const currentEffect = activeWatcher
+        // 每次 getter 执行时, 都会设置这里的 activeWatcher 为当前的 efffect
+        // 这样下面执行的 watch((boundCleanup) => { boundCleanup(userCleanupFn) }, null)
+        // 用户执行 boundCleanup(userCleanupFn) -> onWatcherCleanup(userCleanupFn, false, effect)
+        // 或者直接执行:
+        // watch(() => {
+        //   // 此时在 watch 函数的 getter 中, 那么此时的 activeWatcher 是存在的,
+        //   // 因为这里的 activeWatcher 赋值了, 所以在 onWatcherCleanup 可以读取 activeWatcher
+        //   onWatcherCleanup(fn)
+        // }, null)
         activeWatcher = effect
         try {
           return call
             ? call(source, WatchErrorCodes.WATCH_CALLBACK, [boundCleanup])
             : source(boundCleanup)
+          // fn => onWatcherCleanup(fn, false, effect)
         } finally {
           activeWatcher = currentEffect
         }
@@ -213,6 +228,7 @@ export function watch(
   const scope = getCurrentScope()
   const watchHandle: WatchHandle = () => {
     effect.stop()
+    // effect.onStop() -> 调用这里的 cleanups 注册的函数
     if (scope && scope.active) {
       remove(scope.effects, effect)
     }
@@ -233,13 +249,17 @@ export function watch(
   const job = (immediateFirstRun?: boolean) => {
     if (
       !(effect.flags & EffectFlags.ACTIVE) ||
+      // effect.dirty -> isDirty(this)
+      // 遍历 watch effect 的所有 dep.version 与 link.version对比)包括计算属性的对比
       (!effect.dirty && !immediateFirstRun)
     ) {
+      // effect 没有 dirty, 无需执行 watch job
       return
     }
     if (cb) {
+      // 如果有回调函数,计算 getter 的新旧值
       // watch(source, cb)
-      const newValue = effect.run()
+      const newValue = effect.run() // 执行传入的 source
       if (
         deep ||
         forceTrigger ||
@@ -249,9 +269,18 @@ export function watch(
       ) {
         // cleanup before running cb again
         if (cleanup) {
+          // 执行通过  onWatcherCleanup(fn) 注册的函数
           cleanup()
         }
         const currentWatcher = activeWatcher
+        // watcher 的回调函数中 cb 执行前设置当前的 activeEffect, 以便可以在 cb 执行对应的注册函数
+        // watch(source, () => {
+        //   // 这个回调函数执行前, watch 内部会先执行 cleanup 函数
+        //   // 然后当前回调函数的执行上下文设置当前的 activeWatcher = effect, 这样就可以执行
+        //   onWatcherCleanup(fn) // 此时这个函数就可以在 cb 上下文中执行, 可以获取 activeWatcher 注册
+        //   // cleanup 函数到 activeWatcher 上, 等下一次执行再次执行 cb 时, 就会先执行前一次注册在
+        //   // activeWatcher 中的清除函数
+        // })
         activeWatcher = effect
         try {
           const args = [
@@ -262,14 +291,23 @@ export function watch(
               : isMultiSource && oldValue[0] === INITIAL_WATCHER_VALUE
                 ? []
                 : oldValue,
+            // 这里是 cb 回调函数的第 3 个参数 onCleanup
             boundCleanup,
+            // boundCleanup(fn) -> onWatcherCleanup(fn) 将清除函数 fn 注册到 boundCleanup 函数定义时
+            // 绑定的闭包中 effect 即 activeWatcher 中
+            // 等价于在 cb 回调函数中执行 onWatcherCleanup(fn)
           ]
           call
-            ? call(cb!, WatchErrorCodes.WATCH_CALLBACK, args)
+            ? // call 是给 packages/runtime-core/src/apiWatch.ts 中 vue 内部定义的 watch api 调用
+              // 里面处理错误处理
+              call(cb!, WatchErrorCodes.WATCH_CALLBACK, args)
             : // @ts-expect-error
+              // 执行回调函数
               cb!(...args)
+          // 用新值更新老值
           oldValue = newValue
         } finally {
+          // cb 回调函数执行完后, 恢复 activeWatcher
           activeWatcher = currentWatcher
         }
       }
@@ -279,6 +317,8 @@ export function watch(
     }
   }
 
+  // 这里估计: 在 packages/runtime-core/src/apiWatch.ts
+  // 为 job 设置各种 job 的 flags: PRE, QUEUE, DISPOSE 等
   if (augmentJob) {
     augmentJob(job)
   }
@@ -292,6 +332,7 @@ export function watch(
   boundCleanup = fn => onWatcherCleanup(fn, false, effect)
 
   cleanup = effect.onStop = () => {
+    // watcherEffect 上面是否有注册对应的清除函数
     const cleanups = cleanupMap.get(effect)
     if (cleanups) {
       if (call) {
@@ -310,12 +351,15 @@ export function watch(
 
   // initial run
   if (cb) {
+    // 同步执行
     if (immediate) {
       job(true)
     } else {
       oldValue = effect.run()
     }
   } else if (scheduler) {
+    // 这里的 schedule 是给 packages/runtime-core/src/apiWatch.ts 中使用的
+    // 在 apiWatch 中的 watch 就涉及到 queue 的异步执行了
     scheduler(job.bind(null, true), true)
   } else {
     effect.run()

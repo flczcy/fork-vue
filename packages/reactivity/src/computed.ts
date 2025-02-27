@@ -21,6 +21,7 @@ interface BaseComputedRef<T, S = T> extends Ref<T, S> {
   /**
    * @deprecated computed no longer uses effect
    */
+  // NOTE: vue3.5 版本, computed 的内部实现, 不再依赖 effect
   effect: ComputedRefImpl
 }
 
@@ -128,6 +129,7 @@ export class ComputedRefImpl<T = any> implements Subscriber {
     }
   }
 
+  // effect(() => com.value)
   get value(): T {
     const link = __DEV__
       ? this.dep.track({
@@ -137,6 +139,10 @@ export class ComputedRefImpl<T = any> implements Subscriber {
         })
       : this.dep.track()
     refreshComputed(this)
+    // 只有当 !activeSub || !shouldTrack || activeSub === this.computed 时, link 才不存在
+    // if (!activeSub || !shouldTrack || activeSub === this.computed) {
+    //   return
+    // }
     // sync version after evaluation
     if (link) {
       link.version = this.dep.version

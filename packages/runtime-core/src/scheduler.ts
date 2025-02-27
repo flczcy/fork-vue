@@ -85,11 +85,13 @@ export function nextTick<T = void, R = void>(
 //    packages/runtime-core/src/renderer.ts, 这里卸载时将队列中标识置为 DISPOSED, 后面在执行队列 flush 时
 //    unmountComponent: job.flags! |= SchedulerJobFlags.DISPOSED
 //    跳过该函数的执行
-// Use binary-search to find a suitable position in the queue. The queue needs // to be sorted in increasing order of the job ids. This ensures that:
+// Use binary-search to find a suitable position in the queue. The queue needs
+// to be sorted in increasing order of the job ids. This ensures that:
 // 1. Components are updated from parent to child. As the parent is always
 //    created before the child it will always have a smaller id.
 // 2. If a component is unmounted during a parent component's update, its update
 //    can be skipped.
+// 2. 这是因为组件在卸载时,会将 job.flags 设置上 DISPOSED, 故执行队列时, 会跳过 DISPOSED 的 job 的执行
 // A pre watcher will have the same id as its component's update job. The
 // watcher should be inserted immediately before the update job. This allows
 // watchers to be skipped if the component is unmounted by the parent update.

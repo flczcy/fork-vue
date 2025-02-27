@@ -90,7 +90,8 @@ export class ReactiveEffect<T = any>
    * @internal
    * 每一个 sub 对应多个 dep, 这里的 deps 指向该 sub 中第一个 dep
    * [dep, dep, dep]
-   *  |<-deps
+   *  |
+   *  deps
    *            |-depsTail
    */
   deps?: Link = undefined
@@ -122,6 +123,7 @@ export class ReactiveEffect<T = any>
     }
   }
 
+  // 这里的 effect.pasue() 不会影响计算属性内部的更新, 因为计算属性已经不在基于 effect 实现了
   pause(): void {
     this.flags |= EffectFlags.PAUSED
   }
@@ -190,6 +192,7 @@ export class ReactiveEffect<T = any>
     }
   }
 
+  // 这里的 effect.pasue() 不会影响计算属性内部的更新, 因为计算属性已经不在基于 effect 实现了
   stop(): void {
     if (this.flags & EffectFlags.ACTIVE) {
       for (let link = this.deps; link; link = link.nextDep) {
@@ -203,12 +206,17 @@ export class ReactiveEffect<T = any>
   }
 
   trigger(): void {
+    // trigger 会首先检查此 effect 是否有被 paused
     if (this.flags & EffectFlags.PAUSED) {
       pausedQueueEffects.add(this)
     } else if (this.scheduler) {
       // 若是有 scheduler 则不需要判断 isDirty(this)
       this.scheduler()
     } else {
+      // foo.a = 1
+      // foo.a++ -> dep.trigger{ dep.version++ } -> sub.trigger()
+      //                         这里只是 dep.version++, 但是 sub 中的 link 的 version 还没有同步
+      // 判断一个 effect 是否 dirty 使用依赖的 version 计数进行判断
       this.runIfDirty()
     }
   }
@@ -389,6 +397,17 @@ function isDirty(sub: Subscriber): boolean {
   for (let link = sub.deps; link; link = link.nextDep) {
     if (
       link.dep.version !== link.version ||
+      // 若是 dep 有属性 computed, 则为 计算属性 dep
+      // effect(() => { com.value, foo.bar } )
+      // 这里的 com.value 的 dep 就是属于计算属性 dep
+      // 故在判断一个 effect 是否 isDirty 时,
+      // 不仅需要判断普通 dep 的 version
+      // 而且需要判断若是一个 effect 有计算属性的 dep 时, 还要判断这个计算属性的 dep 是否 dirty
+      // 而如何判断一个计算属性的 dep dirty 呢?
+      // 这里通过执行函数 refreshComputed(link.dep.computed), 更新 computed 内部的 dep.version
+      // 注意执行函数 refreshComputed 目的就是更新 link.dep.computed.dep.version
+      // 根据其返回值判断是否计算属性 dep 是否 dirty, 或者通过判断执行了 refreshComputed(link.dep.computed)
+      // 后的 link.dep.version
       (link.dep.computed &&
         (refreshComputed(link.dep.computed) ||
           link.dep.version !== link.version))
@@ -406,13 +425,17 @@ function isDirty(sub: Subscriber): boolean {
 
 /**
  * Returning false indicates the refresh failed
+ * 返回 false 表示计算属性重新计算值(重新设置值)失败,返回false
+ * 依旧使用之前的 this._value
  * @internal
  */
 export function refreshComputed(computed: ComputedRefImpl): undefined {
+  // computed.flags 默认为 DIRTY
   if (
     computed.flags & EffectFlags.TRACKING &&
     !(computed.flags & EffectFlags.DIRTY)
   ) {
+    // 提前返回,表示无需计算值,直接使用之前的 this._value
     return
   }
   computed.flags &= ~EffectFlags.DIRTY
@@ -420,6 +443,7 @@ export function refreshComputed(computed: ComputedRefImpl): undefined {
   // Global version fast path when no reactive changes has happened since
   // last refresh.
   if (computed.globalVersion === globalVersion) {
+    // 提前返回,表示无需计算值,直接使用之前的 this._value
     return
   }
   computed.globalVersion = globalVersion
@@ -433,22 +457,68 @@ export function refreshComputed(computed: ComputedRefImpl): undefined {
   if (
     dep.version > 0 &&
     !computed.isSSR &&
+    // computed.deps 在 computed 执行 getter 收集依赖时的 dep.track 设置 computed.deps
     computed.deps &&
+    // 注意这里的 isDirty(computed) 是判断 computed 内部的依赖是否 dirty
+    // computed(() => { foo.a, foo.b, foo.c })
     !isDirty(computed)
   ) {
     computed.flags &= ~EffectFlags.RUNNING
     return
   }
 
+  // effect(() => {
+  //   effect 执行时, 读取计算属性的值, 执行函数 refreshComputed, 将 activeSub = computed
+  //   computed.value {
+  //     computed.dep.track(effect) // 先执行当前的 计算属性 dep.track 到 effect
+  //     然后执行:
+  //     refreshComputed{
+  //       activeSub = computed
+  //       函数里面进行是否更新 computed._value
+  //     }
+  //     执行完 refreshComputed
+  //     return computed._value
+  //   }
+  //   计算属性值读取完后,回复当前 effect 执行中的上下文的 activeSub = prevSub
+  // })
+
   const prevSub = activeSub
   const prevShouldTrack = shouldTrack
   activeSub = computed
+  // 这里设置 activeSub = computed
+  // 注意这里的 activeSub === this.computed 场景为: 计算属性中又嵌套计算属性
+  // const com = computed(() => {
+  //   这里的计算属性 com 依赖了 com 自身, 导致递归依赖时, 此时执行 com.value 进行的依赖收集时,
+  //   不需要将自身作为依赖收集
+  //   return com.value + foo.a
+  // })
+  // track(debugInfo?: DebuggerEventExtraInfo): Link | undefined {
+  //   if (!activeSub || !shouldTrack || activeSub === this.computed) {
+  //     return
+  //   }
   shouldTrack = true
 
   try {
+    // 处理 computed 中的 link, dep
     prepareDeps(computed)
+    // 执行 computed getter
+    // computed((oldValue) => {
+    //   return foo.a + foo.b + foo.c
+    // })
+    // 求值的同时进行计算属性的依赖搜集, 不过是依赖搜集对应的 activeSub 为这里的 computed
+    // effect(() => {
+    //   在 effect 中, 此时的 activeSub 为 effect
+    //   读取计算属性,执行计算属性的 getter, 临时切换 activeSub 到 computed, 收集 computed 内部的依赖,
+    //   同时进行求值,也就是在求值的同时进行computed的依赖搜集
+    //   com.value(() => { ref.value })
+    //   计算属性读取完毕后, 恢复之前的 active 为 effect,
+    //   foo.a, 继续 effect 的普通的 dep 收集
+    // })
     const value = computed.fn(computed._value)
     if (dep.version === 0 || hasChanged(value, computed._value)) {
+      // dep.version = 0 表示初始值, 还未被设置过值
+      // 或者有设置过值,但是之前的值与这次重新计算的值不同
+      // 需要更新值
       computed._value = value
       dep.version++
     }
