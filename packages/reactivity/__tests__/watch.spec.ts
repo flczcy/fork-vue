@@ -394,59 +394,23 @@ describe('watch', () => {
     const n2 = ref(0)
     const sum = computed(() => {
       console.log(0)
-      n1.value + n2.value
+      // BUG: 这里一定要返回出去，要不 sum 体现不出变化，导致对应的 watch 不执行
+      // n1.value + n2.value
+      return n1.value + n2.value
     })
-    // n1.value 追踪 effect
-    watch(n1, () => {
-      dummy.push(1)
-      // 注意 在 watch cb 回调函数中没有对应的 activeSub, 无法进行 track, 但是可以触发 trigger
-      // 这里的 set 操作会触发其对应的 sub 更新
-      console.log(1)
-      // n2.value++
-      // 触发 computed.notify -> effect.notify -> endBatch -> effect.trigger ->
-      // effect.runIfDirty() -> e.isDirty -> refreshComputed(link.dep.computed)
-      // 正是这里的 runIfDirty 的判断, 解决了计算属性多个属性分别设置值时触发 effect.run 多次的问题
-      // 若是没有 effect.runIfDirty() 的检测 多个计算属性的更新就会形成多次的 trigger
-    })
-    // sum.value -> 进入 sum 计算属性
+    // watch(n1, () => {
+    //   dummy.push(1)
+    //   console.log(1)
+    // })
     watch(sum, () => {
       console.log(2)
       dummy.push(2)
     })
-    watch(n1, () => {
-      console.log(3)
-      dummy.push(3)
-    })
+    // watch(n1, () => {
+    //   console.log(3)
+    //   dummy.push(3)
+    // })
 
-    // 这里的 n1.value 对应了两种 effect,
-    // 第一个是 watchEffect, 第二个是 computedEffect
-    // n1.trigger 时, 触发的 effect 要按照顺序 access order 读取顺序进行
-    // 首先执行 watchEffect 回调函数 -> 但是在其回调函数中, 又触发了 n2.value++ 导致开始执行
-    // n2.value 对应的计算属性的更新, 但是这里还有 n1.value 对应的计算属性需要等待更新呢?
-    // 没办法, 因为是同步执行的, 只能先执行 n2.value++ 引起的计算属性的 dep.trigger 了
-    // computed.notify -> watchEffect.notify() ->
-    // 在执行 watch 对应的 job 前会有  (!effect.dirty && !immediateFirstRun)
-    // 对应 effect.dirty 的检测 -> effect.isDirty -> refreshComputed(link.dep.computed)
-    // 会对当前的 effect 中每一个 dep 进行脏检查, 特别是计算属性多个属性更新
-    // 脏了,就执行一次 job() 也就是这里的 watch(sum, () => {}) 对应的回调函数
-
-    // 现在开始 n1.value++ 引起的更新, 继续执行到 watch 的 (!effect.dirty && !immediateFirstRun)
-    // 判断, 此时再次对当前的 effct 进行一次脏检查, 发现不脏了, 这是因为在前一次执行 n2.value++ 所引起的
-    // 变化时,执行的 effect 更新, 已经将这里的 n1.value++ 引起的变化考虑进去了, 所以此时再次执行 n1.value++
-    // 所引起的变化, 就不触发重新更新了. 这样就避免了一次设置多个属性值所引起的触发多次的更新了
-    // 这样在同步模式下(注意这里不考虑异步更新)也可以达到异步模式下的设置多次,只触发一次的更新了, 因为在
-    // 触发 trigger 是加入了脏检查
-
-    // 触发 notify
-    // n1 对应的subs: [w1, c1, w2]
-    // 这里触发 trigger, 此时给各个 sub 设置 flags
-    // [w1.notified, c1.notified, w2.notified]
-    // 开始从 w1 执行, 但是在 w1 中再次触发 n2.value++, 触发 n2 对应的 subs
-    // n2 对应的subs: [c1]
-    // n2 n2.dtrigger -> n2.notifiy(), 此时发现 c1 已经有了 notified 标识了,
-    // 所以就不再 batch(c1) 了, 此时 batchedSub 没有得到设置
-    // 执行 n2 的 endBatch, 但是此时在 batchedSub 已经被设置为 undefined 了,
-    // 所以此时的 n2.tirgger 就没有触发更新
     n1.value++
 
     // expect(dummy).toEqual([1, 2, 3])
