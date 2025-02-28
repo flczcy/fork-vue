@@ -128,6 +128,7 @@ export class ReactiveEffect<T = any>
     this.flags |= EffectFlags.PAUSED
   }
 
+  // 会手动触发 trigger, 同时移除 PAUSED 标识
   resume(): void {
     if (this.flags & EffectFlags.PAUSED) {
       this.flags &= ~EffectFlags.PAUSED
@@ -146,95 +147,12 @@ export class ReactiveEffect<T = any>
       this.flags & EffectFlags.RUNNING &&
       !(this.flags & EffectFlags.ALLOW_RECURSE)
     ) {
-      // 当在用户函数 this.fn() 中设置值时, 执行到此处 此时的 EffectFlags.RUNNING 为 true
-      // 在不启用 ALLOW_RECURSE 这里直接返回了 导致不会执行 batch(this), 从而导致 batchedSub 为 undfined
-      // 因为在执行 this.fn() 前, batchedSub 为 undfined, 或者在 endBatch 中在执行 this.fn 前,
-      // 将 batchedSub 值设置为 undefined 了, 而在 this.fn() 中设置值, 执行到这里判断
-      // EffectFlags.RUNNING 为 true, 从而不去设置 batchedSub 导致 endBatch 中不会再次执行 this.fn,
-      // 这样则避免了无限递归循环问题
-      //
       return
     }
-    // !! 注意: 每个 dep.trigger 总是 startBatch(), batch(this), endBatch() 是成对的, 最终 batchDepth
-    // 总是前后不变, 只有外部的 比如这里最上面的 startBatch() 执行时才会导致 batchDepth 一直 > 0 , 直
-    // 到最后成对的 endBatch() 才会将 batchDepth 设置到 0
-    /**
-     *
-     *```js
-     *  dep.trigger() {
-     *    dep.version++ // => link.dep.version++
-     *    dep.notfiy() {
-     *      startBatch(){ batchDepth++ },
-     *      // 一个 dep 会对应多个 sub, 这里遍历逐个 notify
-     *      for (let link = this.subs; link; link = link.prevSub) {
-     *        link.sub.notify() {
-     *          if(sub.flags & EffectFlags.RUNNING) {
-     *            // 不允许递归调用则直接返回, 默认为不允许递归
-     *            if(!(sub.flags & EffectFlags.ALLOW_RECURSE)) return
-     *          }
-     *          if(sub.flags & EffectFlags.NOTIFIED) return
-     *          batch(sub) {
-     *            sub.flags |= EffectFlags.NOTIFIED
-     *            sub.next = batchedSub
-     *            batchedSub = sub
-     *          }
-     *        },
-     *      }
-     *      endBatch() {
-     *        batchDepth--
-     *        if(batchDepth > 0) return
-     *        e = batchedSub
-     *        batchedSub = undefined
-     *        next = e.next
-     *        e.flags &= ~EffectFlags.NOTIFIED
-     *        if (!(e.flags & EffectFlags.ACTIVE)) return
-     *        e.trigger(){
-     *          if (!isDirty(e){
-     *            // 遍历当前 sub 中的 link (dep)
-     *            for (let link = sub.deps; link; link = link.nextDep) {
-     *              if(link.version !== link.dep.version) return true
-     *              // 若遍历的 dep 为 computed
-     *              if(link.dep.computed) {
-     *                // 调用 refreshComputed() 对计算属性进行求值, 更新计算属性的 dep.version
-     *                refreshComputed(link.dep.computed)
-     *                // 更新 计算属性的 dep.version 后
-     *                if(link.version !== link.dep.version) return true
-     *              }
-     *            }
-     *            return false
-     *          }) return
-     *          e.run() {
-     *            if (this.flags & EffectFlags.ACTIVE) return
-     *            e.flags |= EffectFlags.RUNNING
-     *            // NOTE: fn() 执行前,
-     *            // 1. NOTIFIED 已经被去掉
-     *            // 2. batchedSub 已经被置为 undefined
-     *            e.fn() {
-     *              // ... 重新进行依赖收集
-     *              dep.track() {
-     *                // 新的 dep: new Link(dep, sub) and addSub(link)
-     *                // 老的 dep: 同步版本
-     *                link.version = this.version
-     *                // 更新 link 读取顺序
-     *                // ...
-     *              }
-     *              // dep.trigger -> EffectFlags.RUNNING -> return 避免递归循环
-     *            }
-     *            // 依赖收集结束后, 清除依赖(之前存在的, 这次运行后不存在的, 需要移除)
-     *            cleanupDeps(this)
-     *            e.flags &= ~EffectFlags.RUNNING
-     *          }
-     *        }
-     *        e.next = next // 继续下一个 sub 的更新
-     *      }
-     *    }
-     *  }
-     * ```
-     */
     if (!(this.flags & EffectFlags.NOTIFIED)) {
       batch(this)
     } else {
-      console.log('NOTIFIED')
+      console.log('E.NOTIFIED')
     }
   }
 
@@ -296,7 +214,7 @@ export class ReactiveEffect<T = any>
     }
   }
 
-  // 这里的 effect.pasue() 不会影响计算属性内部的更新, 因为计算属性已经不在基于 effect 实现了
+  // 这里的 effect.stop, pause, 不会影响计算属性内部的更新, 因为计算属性已经不在基于 effect 实现了
   stop(): void {
     if (this.flags & EffectFlags.ACTIVE) {
       for (let link = this.deps; link; link = link.nextDep) {
@@ -312,6 +230,7 @@ export class ReactiveEffect<T = any>
   trigger(): void {
     // trigger 会首先检查此 effect 是否有被 paused
     if (this.flags & EffectFlags.PAUSED) {
+      // pasued trigger 不会触发 run
       pausedQueueEffects.add(this)
     } else if (this.scheduler) {
       // 若是有 scheduler 则不需要判断 isDirty(this)
@@ -374,21 +293,6 @@ export function startBatch(): void {
   batchDepth++
 }
 
-// 这里要成对调用
-// startBatch() // ++
-//   batch(sub)
-//   startBatch() // ++
-//   batch(sub)
-//   // ... 执行其他代码
-//   endBatch() { // -- 这里只执行了一次 -- , 而前面有两次 ++ 所有 batchDepth 大于 0
-//     // 这里这里嵌套的 endBatch 不会执行,直接 return 因为 --batchDepth 依然大于 0
-//     startBatch() // ++
-//     batch(sub)
-//     endBatch()
-//   }
-//   // 只有最后一个 endBatch 才会执行
-// endBatch()
-
 /**
  * Run batched effects when all batches have ended
  * @internal
@@ -398,10 +302,6 @@ export function endBatch(): void {
     return
   }
 
-  // 最后计算更新时,先更新 sub 中 compute, 先对 sub 中的 computed 进行求一次值
-  // 注意这里面并有进行求值, 因为求值的过程已经在 compute 收集依赖时(refreshComputed) 的同时进行
-  // 值的计算了, 并且保存在 computed._value 中了, 所以这里无需再次进行求值
-  // 这里只是将 computed 的 flags NOTIFIED 去掉
   if (batchedComputed) {
     let e: Subscriber | undefined = batchedComputed
     batchedComputed = undefined
@@ -410,12 +310,6 @@ export function endBatch(): void {
       e.next = undefined
       e.flags &= ~EffectFlags.NOTIFIED
       e = next
-      // NOTE:
-      // 计算属性没有 e.trigger(), 这里只是仅仅去掉标识 NOTIFIED
-      // 这里是由于计算属性中依赖触发的更新执行到这里,只是将这里的 computed 中的标识 NOTIFIED 去掉而已
-      // NOTIFIED 是在 batch() 函数中设置: sub.flags |= EffectFlags.NOTIFIED
-      // 计算属性不在这里执行其更新函数, 而是推迟(Lazy)到实际读取值 com.value 时执行其更新函数(effectGetter)
-      // 这里的计算属性 effect, 并没有 ACTIVE 状态, 说明计算属性没有 stop, pause, resume 等 effect 功能
     }
   }
 
@@ -429,16 +323,8 @@ export function endBatch(): void {
       e.flags &= ~EffectFlags.NOTIFIED
       if (e.flags & EffectFlags.ACTIVE) {
         try {
-          // ACTIVE flag is effect-only
-          ;(e as ReactiveEffect).trigger() // {
-          //   batchedSub = newSub
-          // }
-          // 若是这里的 e.trigger() -> this.fn() 中可能递归执行的
-          // 这里面是可以再次设置 batchedSub 为新的 sub 的
-          // 所以此时在里面这一层 while 循环结束后, 会再次执行外层的 while(batchedSub) {
-          //   继续消费 batchedSub 上面的 sub
-          // }
-          // 这就是这里之所以使用两层 while () 的使用场景
+          // ACTIVE flag is effect-only (computed 没有 ACTIVE flag)
+          ;(e as ReactiveEffect).trigger()
         } catch (err) {
           if (!error) error = err
         }
@@ -456,29 +342,6 @@ function prepareDeps(sub: Subscriber) {
     // set all previous deps' (if any) version to -1 so that we can track
     // which ones are unused after the run
     link.version = -1
-    // // sub1
-    // effect(() => {
-    //   track('foo.bar') // 第一次 get, 创建 dep, 并且执行 dep.track(), 创建 link, dep.activeLink = link
-    //   track('foo.bar') // 第二次 get, 不在重复创建 dep, 但是执行 dep.track() 同一个 dep, 同一个 activeSub 无需更改 dep.activeLink
-    //                    // 同时这里也保证了去掉重复的 dep track
-    // })
-    // // sub2
-    // effect(() => {
-    //   track('foo.bar') // 第三次 get, 不在重复创建 dep. dep.track(), dep.activeLink 不为 undfined, sub 不同了, 此时需要创建新的 link
-    //                    // 作为当前 dep 的 activeLink, 也就是 dep 在不同的 sub 中, 需要创建不同的 link 作为 dep.activeLink
-    //   track('foo.bar') // 第四次 get, dep 已经存在,不重复创建, dep.activeLink,也存在,还是同一个 activeSub, 无需更改 dep.activeLink
-    //                    // 同时这里也保证了去掉重复的 dep track
-    // })
-    // [sub1, sub2]
-    // 同一个 dep 的 link 的 link.dep.activeLink -> sub2
-    // 而现在是 sub1 的 run 中, 所以这里需要把这个 link 之前所指向的在 sub2 上下文中 activeLink 保存起来
-    // 同时更新当前 dep link 的 activeLink 为当前 sub1 执行上下中的 link
-    // 后面当在 sub2 中的 run 执行时, 需要把在之前 sub1 执行的 activeLink 保存起来,
-    // 这里更新当前 dep link 的 activeLink 为当前 sub2 执行上下中的 link
-    // 这里主要是用于嵌套执行的回复, link.dep.activeLink 在不同的 sub 中执行, 其 link.dep.activeLink 需要指向当前
-    // 这是因为 link.dep 是同一个, 但是在不同 sub 中执行, 当执行完后一个 sub 后, 其 link.dep.activeLink 指向的则是当前执行的sub中link
-    // 当 link.dep 在其他的 sub 中执行时, 应该把 link.dep.activeLink 设置为当前 sub 中创建的那个 link
-    // 执行 sub 中的那个 link
     // store previous active sub if link was being used in another context
     link.prevActiveLink = link.dep.activeLink
     link.dep.activeLink = link
@@ -515,20 +378,8 @@ function cleanupDeps(sub: Subscriber) {
 }
 
 function isDirty(sub: Subscriber): boolean {
-  // for (let link = sub.deps; link; link = link.nextDep) {
-  //   if (
-  //     link.dep.version !== link.version ||
-  //     (link.dep.computed &&
-  //       (refreshComputed(link.dep.computed) ||
-  //         link.dep.version !== link.version))
-  //   ) {
-  //     return true
-  //   }
-  // }
-  // 遍历当前 sub 中的 link (dep)
   for (let link = sub.deps; link; link = link.nextDep) {
     if (link.version !== link.dep.version) return true
-    // 若遍历的 dep 为 computed
     if (link.dep.computed) {
       // 调用 refreshComputed() 对计算属性进行求值, 更新计算属性的 dep.version
       refreshComputed(link.dep.computed)
@@ -546,13 +397,16 @@ function isDirty(sub: Subscriber): boolean {
 
 /**
  * Returning false indicates the refresh failed
- * 返回 false 表示计算属性重新计算值(重新设置值)失败,返回false
- * 依旧使用之前的 this._value
  * @internal
  */
 export function refreshComputed(computed: ComputedRefImpl): undefined {
-  // EffectFlags.TRACKING compute 的 TRACKING 在 addSub(link) 中设置,也就是初始化加入首个 sub 时设置
-  // 在 removeSub(link) 中去除 EffectFlags.TRACKING
+  // EffectFlags.TRACKING compute 的 TRACKING
+  // com.value -> computed.dep.track() -> addSub() -> 设置 TRACKING | DIRTY
+  // 在 addSub(link) 中设置, 也就是初始化加入首个 sub 时设置
+  // 在 removeSub(link) 中移除 EffectFlags.TRACKING
+  // 一旦一个计算属性被读取后, 只有当 computed 内部所有的依赖都移除后, 这个计算属性才会将
+  // 其 TRACKING 标识移除, 但是计算属性本身是不移除的, 因为是一个引用, 后面可能这个计算属性
+  // 被读取时, 又有依赖了, 那么就又将 TRACKING 标识加上
   if (
     computed.flags & EffectFlags.TRACKING &&
     // computed.flags 默认包含 DIRTY
@@ -563,6 +417,25 @@ export function refreshComputed(computed: ComputedRefImpl): undefined {
     // 提前返回,表示无需计算值,直接使用之前的 this._value
     return
   }
+
+  // 若是没有 TRACKING 标识, 说明之前可能被清除过, 所以不能 return, 需要重新计算值
+  // 若是存在 TRACKING 标识, 没有 DIRTY 说明之前已经被计算过, 所以需要 return, 不需重新计算值
+  // 若是存在 TRACKING 标识, 存在 DIRTY 说明有依赖更新设置值, 所以不需 return, 需要重新计算值
+
+  // com = computed(() => foo.a)
+  // com.value 第 1 次读取 {
+  //   computed.TRACKING computed.DIRTY 存在
+  //   所以需要继续求值
+  //   开始求值时, 先去掉 DIRTY 标识
+  //   第一次求完值后, computed.DIRTY 不存在了
+  // }
+  // com.value 第 2 次读取 {
+  //   EffectFlags.TRACKING 存在 并且 !computed.DIRTY 不存在(因为在第一次求值时去掉了),
+  //   所以这里之间 return
+  // }
+  // 连续同步读取多次, 只有第一次可能需要计算求值, 后面连续读取的 com.value 直接返回第一次的值
+  // console.log(com.value, com.value, com.value)
+
   // 每次读取值时, 先移除 DIRTY 标识
   computed.flags &= ~EffectFlags.DIRTY
 
@@ -608,8 +481,39 @@ export function refreshComputed(computed: ComputedRefImpl): undefined {
     // computed 本身就是一个 sub, 它里面也是由很多的 dep 组成的
     // computed 又是一个 dep, 作为 某个 sub 的 dep, 可以看成是 computed 是一个大型的 dep, 由很多的子 dep 构成
     // computed 里面的 dep 更新 dep.trigger -> dep.subs.compute(作为 sub).notify() -> compute(作为 dep).notfiy()
-    // 注意这里要考虑初始化会执行
     !isDirty(computed) // 这里传入的 computedEffect
+    // 这里的脏检查场景为:
+    // const foo = ref(0)
+    // const bar = ref(0)
+    // const com = computed(() => Math.max(foo.value + bar.value, 5))
+    // watch(com, () => console.log(com.value))
+    // // watch 这里读取 com.value -> 设置初始值 com._value = 5
+    // foo.value = 1
+    // dep.trigger() {
+    //   computed.notify() {
+    //     effect.notify() {
+    //       effect.trigger() {
+    //         isDirty(watch){
+    //           isDirty(computed) {
+    //             refreshComputed() {
+    //               value = Math.max(foo.value + bar.value, 5) // Math.max(1 + 0, 5) // 5
+    //               5 == 5, 这里的值不变化, 所以 不是 dirty, 故这里的 watch 的回调函数无须执行
+    //               if (hasChanged(value, this._value)) {
+    //                  this._value = value
+    //                  computed.dep.version++
+    //               }
+    //             }
+    //           }
+    //         }
+    //       }
+    //     }
+    //   }
+    // }
+
+    // 这里再次触发 computed, 但是在 watch 准备更新读取值时,
+    // refreshComputed() 内部并没有更新 computed.dep.version 所以 isDirty() 返回 false
+    // 再次无需执行 watch 回调函数
+    // bar.value = 2
   ) {
     // 每次 computed 读取值 会进行脏检查, 若是没有脏, 则无需更新 computed._value
     computed.flags &= ~EffectFlags.RUNNING

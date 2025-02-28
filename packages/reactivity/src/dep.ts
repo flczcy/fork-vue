@@ -318,23 +318,34 @@ export class Dep {
 
 function addSub(link: Link) {
   link.dep.sc++
+  // sub 创建时, 默认的 flags 就有 TRACKING
+  // 注意这里的 sub 只会是 effect sub, 而不是 computed sub
   if (link.sub.flags & EffectFlags.TRACKING) {
     const computed = link.dep.computed
     // computed getting its first subscriber
     // enable tracking + lazily subscribe to all its deps
     if (computed && !link.dep.subs) {
+      // 若是当前的这个 dep 是通过 computed 创建的,
+      // 这里是第一个 sub 读取这里的 dep
+      // 那么这里 computed sub 设置上 TRACKING, DIRTY 标识
       computed.flags |= EffectFlags.TRACKING | EffectFlags.DIRTY
+      // 将 computed sub 中 deps 绑定到当前的 computed
       for (let l = computed.deps; l; l = l.nextDep) {
         addSub(l)
       }
     }
-    // subs: [link]
-    // subs: [link1, link2, link]
+    // + link
+    // subs: [] + link
+    //       | link.dep.subs -> undefined
+
+    // subs: [link1, link2] + link
+    //                  | link.dep.subs -> link2
+
     const currentTail = link.dep.subs // undefined or link2
     if (currentTail !== link) {
       // link2 !== link
-      // [link1, link2, link]
-      //           |<-  .prevSub
+      // [link1, link2,      link]
+      //           |<-       .prevSub
       link.prevSub = currentTail
       // [link1, link2,      link]
       //         .nextSub -> |
@@ -342,12 +353,17 @@ function addSub(link: Link) {
     }
 
     if (__DEV__ && link.dep.subsHead === undefined) {
-      // subHead 只会被赋值一次, 因为一个 dep 对应的第一个 sub 是不会变化的, 但是这个 dep 还会有第 2, 3, ...个 sub
-      // 所以 dep 所对应的 subs(tail) 尾部是不断变化的
+      // subHead 只会被赋值一次, 因为一个 dep 对应的第一个 sub 是不会变化的,
+      // 但是这个 dep 还会有第 2, 3, ...个 sub
+      // 所以 dep 所对应的 subs(tail) 尾部是不断变化的, 而 subsHead 确定后就不会变了,
+      // 后续增加 sub, 直接插入尾部, 变更尾部指向皆可
       link.dep.subsHead = link
     }
 
-    // 该 link 的 dep 对应的 sub 指向最后一个 sub
+    //
+    // [link1,    link2,      link]
+    //  |                     |
+    //  link.dep.subsHead     link.dep.subs
     link.dep.subs = link
   }
 }

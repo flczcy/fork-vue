@@ -30,11 +30,22 @@ import type { ComputedRef, ComputedRefImpl } from '../src/computed'
 
 describe('reactivity/computed', () => {
   it('should return updated value', () => {
+    const spy = vi.fn()
     const value = reactive<{ foo?: number }>({})
-    const cValue = computed(() => value.foo)
+    const cValue = computed(() => {
+      spy()
+      return value.foo
+    })
     expect(cValue.value).toBe(undefined)
+    expect(spy).toBeCalledTimes(1)
+
+    // 并不会执行 computed 中求值函数, lazy 的, 只有读取 value 才执行求值函数
     value.foo = 1
+    // 调用次数不会变化
+    expect(spy).toBeCalledTimes(1)
+
     expect(cValue.value).toBe(1)
+    expect(spy).toBeCalledTimes(2)
   })
 
   it('pass oldValue to computed getter', () => {
@@ -63,6 +74,7 @@ describe('reactivity/computed', () => {
     expect(getter).toHaveBeenCalledTimes(1)
 
     // should not compute again
+    // 这里连续读取的是相同的值, 不存在 computed DIRTY
     cValue.value
     expect(getter).toHaveBeenCalledTimes(1)
 

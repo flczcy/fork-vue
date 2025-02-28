@@ -116,6 +116,15 @@ export class ComputedRefImpl<T = any> implements Subscriber {
    * @internal
    */
   notify(): true | void {
+    // 只要 computed 中的 dep 触发的 设置 computed DIRTY 标识
+    // 这里特别要注意, 即使 computed 的 dep 更新, 最终 computed 返回的值不一定更新
+    // const foo = ref(0)
+    // 比如: com = computed(() => Math.max(10, foo))
+    // watch(com, () => console.log(com.value))
+    // foo.value = 5
+    // 这里的 foo.vlaue 更新了, 只是表明 computed 脏了, 但是不一定就表示最终返回的 computed 值有变化
+    // 这里的 foo.value 设置为 5, 但是 computed 返回的依然为 10, 并没有变化
+    // foo.value = 7 表明 computed 脏了, 但是返回的值依旧为 10 并无变化
     this.flags |= EffectFlags.DIRTY
     if (
       // NOTIFIED 防止追加重发的 sub(Computed)
@@ -131,6 +140,10 @@ export class ComputedRefImpl<T = any> implements Subscriber {
       activeSub !== this
     ) {
       batch(this, true)
+      // 也就是计算属性的依赖更新通过 computed.notify -> computed.dep.notify
+      // 通知 父 effect 更新来读取计算属性的 com.value
+      // 从而触发计算属性的求值函数, 他不自己更新值, 硬是要父 effect 更新来读取值
+      // 这里返回 true, 表示通其订阅的 sub 更新, 从而触发 com.value 读取执行求值函数
       return true
     } else if (__DEV__) {
       // TODO warn
