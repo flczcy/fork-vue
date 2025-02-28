@@ -118,7 +118,15 @@ export class ComputedRefImpl<T = any> implements Subscriber {
   notify(): true | void {
     this.flags |= EffectFlags.DIRTY
     if (
+      // NOTIFIED 防止追加重发的 sub(Computed)
       !(this.flags & EffectFlags.NOTIFIED) &&
+      // effect({
+      //   comA {
+      //     comA -> 计算属性自己内部 dep 依赖自己, 若是这里不判断 activeSub !== this 的话就会重复进入无限循环
+      //     foo.a
+      //   }
+      // })
+      // foo.a - comA.notfiy -> comA.notify -> comA.notify ... 循环
       // avoid infinite self recursion
       activeSub !== this
     ) {

@@ -155,6 +155,82 @@ export class ReactiveEffect<T = any>
       //
       return
     }
+    // !! 注意: 每个 dep.trigger 总是 startBatch(), batch(this), endBatch() 是成对的, 最终 batchDepth
+    // 总是前后不变, 只有外部的 比如这里最上面的 startBatch() 执行时才会导致 batchDepth 一直 > 0 , 直
+    // 到最后成对的 endBatch() 才会将 batchDepth 设置到 0
+    /**
+     *
+     *```js
+     *  dep.trigger() {
+     *    dep.version++ // => link.dep.version++
+     *    dep.notfiy() {
+     *      startBatch(){ batchDepth++ },
+     *      // 一个 dep 会对应多个 sub, 这里遍历逐个 notify
+     *      for (let link = this.subs; link; link = link.prevSub) {
+     *        link.sub.notify() {
+     *          if(sub.flags & EffectFlags.RUNNING) {
+     *            // 不允许递归调用则直接返回, 默认为不允许递归
+     *            if(!(sub.flags & EffectFlags.ALLOW_RECURSE)) return
+     *          }
+     *          if(sub.flags & EffectFlags.NOTIFIED) return
+     *          batch(sub) {
+     *            sub.flags |= EffectFlags.NOTIFIED
+     *            sub.next = batchedSub
+     *            batchedSub = sub
+     *          }
+     *        },
+     *      }
+     *      endBatch() {
+     *        batchDepth--
+     *        if(batchDepth > 0) return
+     *        e = batchedSub
+     *        batchedSub = undefined
+     *        next = e.next
+     *        e.flags &= ~EffectFlags.NOTIFIED
+     *        if (!(e.flags & EffectFlags.ACTIVE)) return
+     *        e.trigger(){
+     *          if (!isDirty(e){
+     *            // 遍历当前 sub 中的 link (dep)
+     *            for (let link = sub.deps; link; link = link.nextDep) {
+     *              if(link.version !== link.dep.version) return true
+     *              // 若遍历的 dep 为 computed
+     *              if(link.dep.computed) {
+     *                // 调用 refreshComputed() 对计算属性进行求值, 更新计算属性的 dep.version
+     *                refreshComputed(link.dep.computed)
+     *                // 更新 计算属性的 dep.version 后
+     *                if(link.version !== link.dep.version) return true
+     *              }
+     *            }
+     *            return false
+     *          }) return
+     *          e.run() {
+     *            if (this.flags & EffectFlags.ACTIVE) return
+     *            e.flags |= EffectFlags.RUNNING
+     *            // NOTE: fn() 执行前,
+     *            // 1. NOTIFIED 已经被去掉
+     *            // 2. batchedSub 已经被置为 undefined
+     *            e.fn() {
+     *              // ... 重新进行依赖收集
+     *              dep.track() {
+     *                // 新的 dep: new Link(dep, sub) and addSub(link)
+     *                // 老的 dep: 同步版本
+     *                link.version = this.version
+     *                // 更新 link 读取顺序
+     *                // ...
+     *              }
+     *              // dep.trigger -> EffectFlags.RUNNING -> return 避免递归循环
+     *            }
+     *            // 依赖收集结束后, 清除依赖(之前存在的, 这次运行后不存在的, 需要移除)
+     *            cleanupDeps(this)
+     *            e.flags &= ~EffectFlags.RUNNING
+     *          }
+     *        }
+     *        e.next = next // 继续下一个 sub 的更新
+     *      }
+     *    }
+     *  }
+     * ```
+     */
     if (!(this.flags & EffectFlags.NOTIFIED)) {
       batch(this)
     } else {
@@ -167,6 +243,16 @@ export class ReactiveEffect<T = any>
 
     if (!(this.flags & EffectFlags.ACTIVE)) {
       // stopped during cleanup
+      // 为何 这里还敢执行 this.fn(), 不拍触发 get track 吗?
+      // 首先看 this.stop() 做了什么? 不会触发 trigger
+      // 因为在 stop() 中移除了每个 link 对应的 link.dep.subs
+      // console.log(`effect.stop`)
+      // NOTE:
+      // 注意这里直接返回了, 此时的 activeSub = undefined
+      // activeSub 要到下面的 语句才赋值为 this, 所以这里即使触发的 fn 中 get
+      // 也会在 deo.track 中立即返回 而不会进行实际的 track
+
+      // stopped during cleanup
       return this.fn()
     }
 
@@ -176,6 +262,22 @@ export class ReactiveEffect<T = any>
     const prevEffect = activeSub
     const prevShouldTrack = shouldTrack
     activeSub = this
+
+    // effect(() => {
+    //   spy1()
+    //   pauseTracking() -- 设置了 shouldTrack = false 外部设置的 shouldTrack 不影响嵌套内部的 effect 执行
+    //   时还会设置 shouldTrack 为 true, 因为每一个 effect 内部会会将 shouldTrack 重置为 true
+    //   n.value
+    //   effect(() => { -- 但是进入了这个嵌套的 effect 时, 将之前的 shouldTrack 保存,
+    //   此时再强制将 shouldTrack 设置为 true, 结束后,再恢复之前保存的 shouldTrack
+    //     n.value
+    //     spy2()
+    //   })
+    //   n.value
+    //   resetTracking()
+    // })
+    // 这里的 shouldTrack 设置为 true, 是为了不受外部的 pauseTracking() 设置的影响, 无论外部如何设置
+    // shouldTrack, 这里一定设置为 true, 因为我下面就是要执行依赖收集的
     shouldTrack = true
 
     try {
@@ -215,10 +317,6 @@ export class ReactiveEffect<T = any>
       // 若是有 scheduler 则不需要判断 isDirty(this)
       this.scheduler()
     } else {
-      // foo.a = 1
-      // foo.a++ -> dep.trigger{ dep.version++ } -> sub.trigger()
-      //                         这里只是 dep.version++, 但是 sub 中的 link 的 version 还没有同步
-      // 判断一个 effect 是否 dirty 使用依赖的 version 计数进行判断
       this.runIfDirty()
     }
   }
@@ -260,7 +358,6 @@ let batchedComputed: Subscriber | undefined
 
 export function batch(sub: Subscriber, isComputed = false): void {
   sub.flags |= EffectFlags.NOTIFIED
-  ;(sub as any).NOTIFIED = true
   if (isComputed) {
     sub.next = batchedComputed
     batchedComputed = sub
@@ -301,6 +398,10 @@ export function endBatch(): void {
     return
   }
 
+  // 最后计算更新时,先更新 sub 中 compute, 先对 sub 中的 computed 进行求一次值
+  // 注意这里面并有进行求值, 因为求值的过程已经在 compute 收集依赖时(refreshComputed) 的同时进行
+  // 值的计算了, 并且保存在 computed._value 中了, 所以这里无需再次进行求值
+  // 这里只是将 computed 的 flags NOTIFIED 去掉
   if (batchedComputed) {
     let e: Subscriber | undefined = batchedComputed
     batchedComputed = undefined
@@ -309,6 +410,12 @@ export function endBatch(): void {
       e.next = undefined
       e.flags &= ~EffectFlags.NOTIFIED
       e = next
+      // NOTE:
+      // 计算属性没有 e.trigger(), 这里只是仅仅去掉标识 NOTIFIED
+      // 这里是由于计算属性中依赖触发的更新执行到这里,只是将这里的 computed 中的标识 NOTIFIED 去掉而已
+      // NOTIFIED 是在 batch() 函数中设置: sub.flags |= EffectFlags.NOTIFIED
+      // 计算属性不在这里执行其更新函数, 而是推迟(Lazy)到实际读取值 com.value 时执行其更新函数(effectGetter)
+      // 这里的计算属性 effect, 并没有 ACTIVE 状态, 说明计算属性没有 stop, pause, resume 等 effect 功能
     }
   }
 
@@ -320,11 +427,18 @@ export function endBatch(): void {
       const next: Subscriber | undefined = e.next
       e.next = undefined
       e.flags &= ~EffectFlags.NOTIFIED
-      ;(e as any).NOTIFIED = false
       if (e.flags & EffectFlags.ACTIVE) {
         try {
           // ACTIVE flag is effect-only
-          ;(e as ReactiveEffect).trigger()
+          ;(e as ReactiveEffect).trigger() // {
+          //   batchedSub = newSub
+          // }
+          // 若是这里的 e.trigger() -> this.fn() 中可能递归执行的
+          // 这里面是可以再次设置 batchedSub 为新的 sub 的
+          // 所以此时在里面这一层 while 循环结束后, 会再次执行外层的 while(batchedSub) {
+          //   继续消费 batchedSub 上面的 sub
+          // }
+          // 这就是这里之所以使用两层 while () 的使用场景
         } catch (err) {
           if (!error) error = err
         }
@@ -401,25 +515,25 @@ function cleanupDeps(sub: Subscriber) {
 }
 
 function isDirty(sub: Subscriber): boolean {
+  // for (let link = sub.deps; link; link = link.nextDep) {
+  //   if (
+  //     link.dep.version !== link.version ||
+  //     (link.dep.computed &&
+  //       (refreshComputed(link.dep.computed) ||
+  //         link.dep.version !== link.version))
+  //   ) {
+  //     return true
+  //   }
+  // }
+  // 遍历当前 sub 中的 link (dep)
   for (let link = sub.deps; link; link = link.nextDep) {
-    if (
-      link.dep.version !== link.version ||
-      // 若是 dep 有属性 computed, 则为 计算属性 dep
-      // effect(() => { com.value, foo.bar } )
-      // 这里的 com.value 的 dep 就是属于计算属性 dep
-      // 故在判断一个 effect 是否 isDirty 时,
-      // 不仅需要判断普通 dep 的 version
-      // 而且需要判断若是一个 effect 有计算属性的 dep 时, 还要判断这个计算属性的 dep 是否 dirty
-      // 而如何判断一个计算属性的 dep dirty 呢?
-      // 这里通过执行函数 refreshComputed(link.dep.computed), 更新 computed 内部的 dep.version
-      // 注意执行函数 refreshComputed 目的就是更新 link.dep.computed.dep.version
-      // 根据其返回值判断是否计算属性 dep 是否 dirty, 或者通过判断执行了 refreshComputed(link.dep.computed)
-      // 后的 link.dep.version
-      (link.dep.computed &&
-        (refreshComputed(link.dep.computed) ||
-          link.dep.version !== link.version))
-    ) {
-      return true
+    if (link.version !== link.dep.version) return true
+    // 若遍历的 dep 为 computed
+    if (link.dep.computed) {
+      // 调用 refreshComputed() 对计算属性进行求值, 更新计算属性的 dep.version
+      refreshComputed(link.dep.computed)
+      // 更新 计算属性的 dep.version 后
+      if (link.version !== link.dep.version) return true
     }
   }
   // @ts-expect-error only for backwards compatibility where libs manually set
@@ -437,22 +551,41 @@ function isDirty(sub: Subscriber): boolean {
  * @internal
  */
 export function refreshComputed(computed: ComputedRefImpl): undefined {
-  // computed.flags 默认为 DIRTY
+  // EffectFlags.TRACKING compute 的 TRACKING 在 addSub(link) 中设置,也就是初始化加入首个 sub 时设置
+  // 在 removeSub(link) 中去除 EffectFlags.TRACKING
   if (
     computed.flags & EffectFlags.TRACKING &&
+    // computed.flags 默认包含 DIRTY
     !(computed.flags & EffectFlags.DIRTY)
   ) {
+    // computed.notify() 中设置 computed.flags |= EffectFlags.DIRTY
+    // 在 TRACKING (没有被移除) && 第二次(同步)执行时直接使用前一次执行时的 _value
     // 提前返回,表示无需计算值,直接使用之前的 this._value
     return
   }
+  // 每次读取值时, 先移除 DIRTY 标识
   computed.flags &= ~EffectFlags.DIRTY
+
+  // globalVersion++ 在 dep.trigger() 执行, 只要有设置值, globalVersion++
+  // 注意理解这个 globalVersion 只要 globalVersion 没有变化, 那么说明整个 sub(effect), 或者整个 app
+  // 都没有触发 set 操作, 此时可以看做没有变化, 那么这里的 compute 则无需再次计算, 因为整个的都没有变化,
+  // 若是 computed 中的 dep 有 trigger 那么 globalVersion 必然不相等
+  // 创建一个 Computed 时, 其初始的 this.globalVersion = globalVersion - 1 ? 这里为什么 -1
+  // 之所以创建 computed.globalVersion = globalVersion - 1, 就是为在初次读取值, 造成不相等,
+  // 执行下面的求值函数
+  // computed.globalVersion = globalVersion - 1 初始化时 computed.globalVersion 与 globalVersion 不相等
+  // 难道只是为了初始化时不相等?
 
   // Global version fast path when no reactive changes has happened since
   // last refresh.
   if (computed.globalVersion === globalVersion) {
     // 提前返回,表示无需计算值,直接使用之前的 this._value
+    // 若是在 SSR 中 computed 总是 re-evaluate, 在 SSR 值的缓存策略只能依靠 globalVersion 进行判断是否需要重新计算
+    // 所以注意 globalVersion 主要用在 SSR 中, 而不是 client 中的渲染中
     return
   }
+  // 记住此次 computed 的版本, 下次更新时, 若还是这个版, 说明没有触发任何的 set 操作
+  // 这里只能用于服务器(SSR) 中保存全局更新版本, 所以这里的 globalVersion 只能用于 SSR 中 fast path (优化)
   computed.globalVersion = globalVersion
 
   const dep = computed.dep
@@ -462,14 +595,23 @@ export function refreshComputed(computed: ComputedRefImpl): undefined {
   // Instead, computed always re-evaluate and relies on the globalVersion
   // fast path above for caching.
   if (
+    // dep.version > 0 表示不是初始化, 初始化的 dep.version = 0
     dep.version > 0 &&
     !computed.isSSR &&
     // computed.deps 在 computed 执行 getter 收集依赖时的 dep.track 设置 computed.deps
+    // 这里要将 computed 看成是另一种 effect, computed 中也会包含很多的 dep
     computed.deps &&
     // 注意这里的 isDirty(computed) 是判断 computed 内部的依赖是否 dirty
     // computed(() => { foo.a, foo.b, foo.c })
-    !isDirty(computed)
+    // 遍历整个 computed 中的 dep, 若是这这里面的 dep 都没有变化, 也就无需再次计算
+    // 注意:
+    // computed 本身就是一个 sub, 它里面也是由很多的 dep 组成的
+    // computed 又是一个 dep, 作为 某个 sub 的 dep, 可以看成是 computed 是一个大型的 dep, 由很多的子 dep 构成
+    // computed 里面的 dep 更新 dep.trigger -> dep.subs.compute(作为 sub).notify() -> compute(作为 dep).notfiy()
+    // 注意这里要考虑初始化会执行
+    !isDirty(computed) // 这里传入的 computedEffect
   ) {
+    // 每次 computed 读取值 会进行脏检查, 若是没有脏, 则无需更新 computed._value
     computed.flags &= ~EffectFlags.RUNNING
     return
   }
@@ -489,6 +631,7 @@ export function refreshComputed(computed: ComputedRefImpl): undefined {
   //   计算属性值读取完后,回复当前 effect 执行中的上下文的 activeSub = prevSub
   // })
 
+  // 这里切换 activeSub, 准备收集 computedEffect 中的 dep
   const prevSub = activeSub
   const prevShouldTrack = shouldTrack
   activeSub = computed
@@ -521,6 +664,7 @@ export function refreshComputed(computed: ComputedRefImpl): undefined {
     //   计算属性读取完毕后, 恢复之前的 active 为 effect,
     //   foo.a, 继续 effect 的普通的 dep 收集
     // })
+    // 既收集了 computedEffect 的 dep后, 将函数值进行返回作为 computed 的返回值
     const value = computed.fn(computed._value)
     if (dep.version === 0 || hasChanged(value, computed._value)) {
       // dep.version = 0 表示初始值, 还未被设置过值
@@ -601,6 +745,15 @@ export function effect<T = any>(
   fn: () => T,
   options?: ReactiveEffectOptions,
 ): ReactiveEffectRunner<T> {
+  /*
+   const runner = effect(fn)
+   // 注意这类传入的 runner 是从一个 effect 返回的 runner, 此时这里就将 runner 进行解包,
+   // 将 runner 中的 fn 提取出来, 传入 effect
+   const runner2 = effect(runner)
+   // ==> 等价于
+   const runner3 = effect(fn)
+  */
+  // 这里要考虑 fn = effect(fn), fn 是从另一个 effect 返回的 runner
   if ((fn as ReactiveEffectRunner).effect instanceof ReactiveEffect) {
     fn = (fn as ReactiveEffectRunner).effect.fn
   }
