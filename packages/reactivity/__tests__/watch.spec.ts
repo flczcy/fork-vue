@@ -393,27 +393,52 @@ describe('watch', () => {
     const n1 = ref(0)
     const n2 = ref(0)
     const sum = computed(() => {
+      // c1
       console.log(0)
-      // BUG: 这里一定要返回出去，要不 sum 体现不出变化，导致对应的 watch 不执行
+      // BUG:
+      // 这里一定要返回出去，要不 sum 体现不出变化，导致对应的 watch 不执行
       // n1.value + n2.value
       return n1.value + n2.value
     })
-    // watch(n1, () => {
-    //   dummy.push(1)
-    //   console.log(1)
-    // })
+    watch(n1, () => {
+      // w1
+      dummy.push(1)
+      console.log(1)
+      // n1, n2 共用一个计算属性 effect
+      // 对应的计算属性 effect 已经被 n1.value++ 时进行 NOTIFIED 了
+      n2.value++ // NOTIFIED
+      n2.value++ // NOTIFIED
+      n2.value++ // NOTIFIED
+    })
     watch(sum, () => {
+      // w2
       console.log(2)
       dummy.push(2)
     })
-    // watch(n1, () => {
-    //   console.log(3)
-    //   dummy.push(3)
-    // })
+    watch(n1, () => {
+      // w3
+      console.log(3)
+      dummy.push(3)
+    })
 
     n1.value++
+    // dep.set -> [w1, c1, w3] - c1.notify() 返回 true, 表示为 computed,
+    //                                        还需要继续通知 computed.dep.notify()
+    // dep.set -> [w1.notify -> c1.notify               -> w3.notify()
+    //                       -> w2.notify()
+    // [w1: [c1, w2], c1: [w2], w3]
+    // 0 1 0 2 0 2 3
+    // dep.set ->
+    // startBatch++
+    //   batch(sub) -> 返回 true 为计算属性 com.dep.notify()
+    //   startBatch++
+    //   batch(sub)
+    //   endBatch-- 注意这里的 endBatch 不会执行，因为 batchDepth > 0
+    // endBatch--
 
-    // expect(dummy).toEqual([1, 2, 3])
+    //
+
+    expect(dummy).toEqual([1, 2, 3])
   })
 
   test('脏检查,避免重复更新1', () => {

@@ -117,7 +117,6 @@ export class ComputedRefImpl<T = any> implements Subscriber {
    */
   notify(): true | void {
     this.flags |= EffectFlags.DIRTY
-    // console.log(!!(this.flags & EffectFlags.NOTIFIED))
     if (
       !(this.flags & EffectFlags.NOTIFIED) &&
       // avoid infinite self recursion

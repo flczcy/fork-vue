@@ -294,6 +294,18 @@ export class Dep {
           // })
           // 这里的 computed.dep.notify() 是通知外部的 effect() 进行更新
           ;(link.sub as ComputedRefImpl).dep.notify()
+          // 注意这里又开启了
+          // startBatch++
+          //   batch()
+          // endBatch-- 这里的 endBatch 不会执行，因为是属于嵌套
+
+          // dep.set ->
+          // startBatch++
+          //   batch(sub) -> 返回 true 为计算属性 com.dep.notify()
+          //   startBatch++
+          //   batch(sub)
+          //   endBatch-- 注意这里的 endBatch 不会执行，因为 batchDepth > 0
+          // endBatch--
         }
       }
     } finally {

@@ -157,6 +157,8 @@ export class ReactiveEffect<T = any>
     }
     if (!(this.flags & EffectFlags.NOTIFIED)) {
       batch(this)
+    } else {
+      console.log('NOTIFIED')
     }
   }
 
@@ -258,6 +260,7 @@ let batchedComputed: Subscriber | undefined
 
 export function batch(sub: Subscriber, isComputed = false): void {
   sub.flags |= EffectFlags.NOTIFIED
+  ;(sub as any).NOTIFIED = true
   if (isComputed) {
     sub.next = batchedComputed
     batchedComputed = sub
@@ -317,6 +320,7 @@ export function endBatch(): void {
       const next: Subscriber | undefined = e.next
       e.next = undefined
       e.flags &= ~EffectFlags.NOTIFIED
+      ;(e as any).NOTIFIED = false
       if (e.flags & EffectFlags.ACTIVE) {
         try {
           // ACTIVE flag is effect-only
