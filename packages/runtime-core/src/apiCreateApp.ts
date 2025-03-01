@@ -458,6 +458,7 @@ export function createAppAPI<HostElement>(
         return app
       },
 
+      // 只有调用过 runWithContext(fn) 才有给 currentApp 设置值, 执行完 fn() 后, 将 currentApp 重置
       runWithContext(fn) {
         const lastApp = currentApp
         currentApp = app

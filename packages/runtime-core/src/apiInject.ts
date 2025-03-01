@@ -51,6 +51,7 @@ export function inject(
 ) {
   // fallback to `currentRenderingInstance` so that this can be called in
   // a functional component
+  // 函数组件中没有 currentRenderingInstance, 只有 currentRenderingInstance
   const instance = currentInstance || currentRenderingInstance
 
   // also support looking up from app-level provides w/ `app.runWithContext()`
@@ -59,11 +60,17 @@ export function inject(
     // to support `app.use` plugins,
     // fallback to appContext's `provides` if the instance is at root
     // #11488, in a nested createApp, prioritize using the provides from currentApp
+    // 只有调用过 app.runWithContext(fn) 才有给 currentApp 设置值, 执行完 fn() 后, 将 currentApp 重置
+    // 也就是只有在 app.runWithContext(() => {
+    //   这里调用的 inject() 才会在执行 fn 前设置 currentApp 到当前执行的 app
+    //   这里执行的 inject(key), 只会去 currentApp._context.provides 中查找
+    // })
     const provides = currentApp
       ? currentApp._context.provides
       : instance
         ? instance.parent == null
-          ? instance.vnode.appContext && instance.vnode.appContext.provides
+          ? // parent 不存在说明是根组件, 那么就去整个 appContext.provides 查找
+            instance.vnode.appContext && instance.vnode.appContext.provides
           : instance.parent.provides
         : undefined
 

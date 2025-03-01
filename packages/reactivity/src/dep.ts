@@ -114,27 +114,20 @@ export class Dep {
     }
   }
 
-  // NOTE: 运行 track 执行会执行这个函数, this 指向 effect
-  // prepareDeps(this)
   track(debugInfo?: DebuggerEventExtraInfo): Link | undefined {
+    // this.computed => dep.computed
+    // const com = computed(() => {
+    //   读取 com.value 时, 触发 dep.track() 此时这里的 dep.computed === activeSub
+    //   直接 return, 避免将自己作为 computed 自己的 dep 进行收集,
+    //   因为这里的 com.value 是作为 effect 的依赖
+    //   而不是作为 自己的 computed 的 dep 进行收集,
+    //   当然可以作为其他的 computed 的 dep, 但是不可以作为自己 computed 的 dep
+    //   return foo.a + com.value
+    // })
     if (!activeSub || !shouldTrack || activeSub === this.computed) {
+      // https://github.com/flczcy/devtips/issues/338
       return
     }
-
-    // // sub1
-    // effect(() => {
-    //   track('foo.bar') // 第一次 get, 创建 dep, 并且执行 dep.track(), 创建 link, dep.activeLink = link
-    //   track('foo.bar') // 第二次 get, 不在重复创建 dep, 但是执行 dep.track() 同一个 dep, 同一个 activeSub 无需更改 dep.activeLink
-    //                    // 同时这里也保证了去掉重复的 dep track
-    // })
-    // // sub2
-    // effect(() => {
-    //   track('foo.bar') // 第三次 get, 不在重复创建 dep. dep.track(), dep.activeLink 不为 undfined, sub 不同了, 此时需要创建新的 link
-    //                    // 作为当前 dep 的 activeLink, 也就是 dep 在不同的 sub 中, 需要创建不同的 link 作为 dep.activeLink
-    //   track('foo.bar') // 第四次 get, dep 已经存在,不重复创建, dep.activeLink,也存在,还是同一个 activeSub, 无需更改 dep.activeLink
-    //                    // 同时这里也保证了去掉重复的 dep track
-    // })
-
     let link = this.activeLink
     // 若是是新出现的 dep 直接往链表尾部追加
     if (link === undefined || link.sub !== activeSub) {

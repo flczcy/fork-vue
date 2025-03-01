@@ -210,6 +210,8 @@ describe('reactivity/computed', () => {
     plusOne.value
     // mutate n
     n.value++
+    // 这里的 n.value++ 不会触发作为其依赖的 computed 更新,
+    // 注意 computed 的更新只有在读取 com.value 才会执行真正的更新
     // on the 2nd run, plusOne.value should have already updated.
     expect(plusOneValues).toMatchObject([1, 2])
   })

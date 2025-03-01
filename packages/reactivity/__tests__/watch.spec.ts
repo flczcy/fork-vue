@@ -288,23 +288,6 @@ describe('watch', () => {
   // edge case where a nested endBatch() causes an effect to be batched in a
   // nested batch loop with its .next mutated, causing the outer loop to end
   // early
-  // batched.next 的修改
-  // 这里主要是 endBatch() 函数中的 next 的处理要注意, 里面的 e.trigger() 的递归 trigger
-  // dep.trigger ->
-  //   startBatch() // ++
-  //   batch(sub)
-  //   endBatch() { --
-  //     // endBatch 中又开始触发 dep.trigger() -> 又开始 startBatch() ... 递归调用
-  //     e = batchedSub
-  //     batchedSub = undefined
-  //     const next = e.next
-  //     e.next = undefined // 这里将 e.next 置为 undefined, 避免在下面嵌套的 endBatch() 中 next 被修改
-  //     e.flags &= ~EffectFlags.NOTIFIED
-  //     startBatch() // ++
-  //     batch(sub)
-  //     endBatch() // --
-  //     e = next
-  //   }
   test('nested batch edge case', () => {
     // useClamp from VueUse
     const clamp = (n: number, min: number, max: number) =>
@@ -313,23 +296,13 @@ describe('watch', () => {
       return computed({
         get() {
           console.log('nested batch edge case 4')
-          // 这里读取的同时进行值的设定
           const r = src.value
           const v = clamp(r, min, max)
-          // 这里读取的值为 1
-          // 同时设置的值为 1 - 值相同, 不会触发 trigger
           src.value = v
           return v
         },
         set(val) {
           console.log('nested batch edge case 3')
-          // val: 10
-          // val: 5
-          // 这里值变化了, 触发 watch cb 中, 而在 cb 中执行 clamped.value = 5
-          // 又再次进入这里的 set, 此时 计算出的值 为 5 与上次的值一致, 此时不再触发 set
-          // 至此, watch 回调结束
-          // 接下是 watch computed 的回调, 与第一种一样, 会执行一次
-          // effect.isDirty(this) -> refreshComputed -> computed.fn(), fn 就是 computed 的 get函数
           src.value = clamp(val, min, max)
         },
       })
@@ -340,47 +313,16 @@ describe('watch', () => {
     const clamped = useClamp(src, 1, 5)
     watch(src, val => {
       console.log('nested batch edge case 1')
-      // 这里设置计算属性的值, 进入计算属性 set 中
-      // src.value = val -> 这里又触发了 set
-      // 由于前后是相同的值, 所以不会触发 trigger ?
-      // 这一个案例主要说明 watch() 中又触发 watch() 最终达到 值的稳定
-      // 10, 5 -> 值稳定了,
-      // src.value = 10, 第一次设置值 10, 触发这里的 watch
-      // 接着在 watch 中 执行 clamped.value() 中又设置 src.value = 5 -> 又触发一次 watch
-      // 然后执行到这里 clamped.value = 5 最终达到稳定, 否则若是值一直变化, 则会陷入无限循环
-      // watch() 中触发 trigger
       clamped.value = val
     })
-    // src.value -> watchEffect
-
     const spy = vi.fn(() => {
       console.log('nested batch edge case 2')
     })
-    // 计算属性中的 src.value 不是 watch effect 的 dep
-    // 但是设置 src.value 的值会出发 computed.notify -> effect.notify() 最终会出发watch effect 更新
-    // 这里的 src.value 对应两个 effect, 一个是 computedEffect, 一个是 watchEffect
-    // src.value -> computedEffect
-    // 这里读取 clamped.value -> 读取值时, 才开始 track 依赖
-    watch(clamped, spy) // -> 读取 value -> 输出 4
+    watch(clamped, spy)
 
-    // 进入 ref 的 set 值设置完后,再进行 dep.trigger
-    src.value = 2 // trigger effects 这里触发了 两个 effect
+    src.value = 2
     expect(spy).toHaveBeenCalledTimes(1)
     console.log('----------')
-    // console.log('nested batch edge case 4')
-    // 执行第一个 watchEffect 的输出:
-    //   console.log('nested batch edge case 1')
-    //   console.log('nested batch edge case 3')
-    // 执行第二个 computedEffect 的输出:
-    //   注意这里 watch(clamped) 是一个计算属性: 在执行更新的 job 时, 会验证 effect.dirty
-    //   其会调用 effect.isDirty(this) 函数, 而这个 effect.isDirty 函数内部对于计算属性
-    //   则还会调用 refreshComputed(link.dep.computed) 这个函数 会执行 computed.fn(computed._value)
-    //   就是将 computed.fn 就是 创建 computed 传入的 get 函数所以这里还会执行执行 computed 中的 get 函数
-    //   console.log('nested batch edge case 4')
-    //   console.log('nested batch edge case 2')
-
-    // 这里设置值为 10, 读取时就会触发 set
-    // 设置为 10 会在 watch 中有触发 watch
     src.value = 10
     // 这一个案例主要说明 watch() 中又触发 watch() 最终达到 值的稳定
     console.log('done')
