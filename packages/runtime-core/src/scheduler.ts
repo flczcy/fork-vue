@@ -109,6 +109,12 @@ function findInsertionIndex(id: number) {
   //   queueJob(job3)
   // }
   // queueJob(job1)
+  // 这里的 flushIndex + 1 就说明为何 flushIndex 初始值为 -1
+  // 因为若是初始值为 0 的话，那么 start 就是从 1 开始，这不符合数组索引的初始值 0
+  // 因为初始的插入，可能是第一次，那么就必须包含从数组第一个元素开始，此时索引为 0
+  // 之后第二次，需要跳过当前索引，那么直接 + 1 即可跳过
+  // 所以 flushIndex 初始值为 -1，既满足了数组开始从 0 开始，
+  // 又满足 + 1 跳过当前索引的问题
   let start = flushIndex + 1
   // 为何这里不是 queue.length - 1 ? 也可以,实现细节不同而已
   // 实现参考: https://github.com/flczcy/devtips/issues/326
