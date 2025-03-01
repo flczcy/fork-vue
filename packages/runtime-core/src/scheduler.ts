@@ -201,6 +201,9 @@ export function queueJob(job: SchedulerJob): void {
       queue.push(job)
     } else {
       // slow path
+      // 注意这里的插入是从 flushIndex 开始插入, 前面执行过了的 job, 不再考虑
+      // flushIndex 表示当前正在执行的那个 job 再 queue 中所在的索引
+      // 不是每次都从头开始查找插入的
       queue.splice(findInsertionIndex(jobId), 0, job)
     }
 
