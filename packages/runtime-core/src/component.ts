@@ -641,7 +641,14 @@ export function createComponentInstance(
 
     // resolved props and emits options
     // 这里是定义在组件选项中的 props 注意和传入的 vnode.props 的区分
+    // 用户传入的 props 有多中形式, 统一成对象的形式
+    // ['foo', 'bar']  => {foo: { type: String, required: false, default: undefined, ...   }}
+    // { foo: String } => {foo: { type: String, required: false, default: undefined, ...   }}
+    // [{ foo: String }, {bar: Number, default: 0}] => { foo: {}, bar: { type: Number, default: 0 }}
     propsOptions: normalizePropsOptions(type, appContext),
+    // ['a', 'b'] => { a: null, b: null}
+    // { a: () => {}, b: null }
+    // 定义组件暴露的事件函数, 当执行 emit('name') 需要满足时 emits 中定义的事件名称
     emitsOptions: normalizeEmitsOptions(type, appContext),
 
     // emit
@@ -803,8 +810,9 @@ export function setupComponent(
   optimized = false,
 ): Promise<void> | undefined {
   isSSR && setInSSRSetupState(isSSR)
-
+  // h(Foo, props, children) - children 为模板中 slots
   const { props, children } = instance.vnode
+  // instance.type -> object
   const isStateful = isStatefulComponent(instance)
   initProps(instance, props, isStateful, isSSR)
   initSlots(instance, children, optimized)

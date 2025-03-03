@@ -199,14 +199,23 @@ export function initProps(
 
   instance.propsDefaults = Object.create(null)
 
+  // rawProps -> instance.props 表示创建 vnode 时传入的 Props
+  // h(Foo, rawProps, children), 这里的 rawProps 内部可以传入任意的属性,
+  // 需要将 rawProps 进行抽取 若是满足 propsOptions 中需要放入 props, 否在放入 attrs
+  // 比如
+  // h({ props: ['a', 'd']}, {a: 0, b: 1, c: 2})
+  // props: { a: 0 }, attrs: { b: 1, c: 2 }
   setFullProps(instance, rawProps, props, attrs)
 
   // ensure all declared prop keys are present
+  // [NormalizedProps, string[]] | []
   for (const key in instance.propsOptions[0]) {
     if (!(key in props)) {
+      // 上面的 'd' 不在 { a: 0 } 故这里需要将组件声明的 d 属性放入 props, 即使用户没有传入
       props[key] = undefined
     }
   }
+  // props: { a: 0, d: undefined }
 
   // validation
   if (__DEV__) {
@@ -214,17 +223,22 @@ export function initProps(
   }
 
   if (isStateful) {
-    // stateful
+    // stateful (确保 instance.props 为浅的响应式)
     instance.props = isSSR ? props : shallowReactive(props)
   } else {
+    // 函数组件 fn = () => rennder()
+    // h(fn, rawProps, [])
     if (!instance.type.props) {
+      // 若是 fn.props 函数本身没有定义 props, 传入的 rawProps 就全部是 attrs
       // functional w/ optional props, props === attrs
       instance.props = attrs
     } else {
+      // 否则有定义 fn.props, 那么这里的 fn.props 就是 传入的 rawProps 对应的 props
       // functional w/ declared props
       instance.props = props
     }
   }
+  // attrs 不是响应式的, 这里也包括函数式组件的 attrs
   instance.attrs = attrs
 }
 

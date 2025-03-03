@@ -367,6 +367,15 @@ export function createAppAPI<HostElement>(
                 ` you need to unmount the previous app by calling \`app.unmount()\` first.`,
             )
           }
+          // {
+          //   setup() {
+          //     onMounted(() => console.log('mount'))
+          //   }
+          //   // rootVnode.subTree = render()
+          //   render() {
+          //     return "<Foo />"
+          //   }
+          // }
           const vnode = app._ceVNode || createVNode(rootComponent, rootProps)
           // store app context on the root VNode.
           // this will be set on the root instance on initial mount.

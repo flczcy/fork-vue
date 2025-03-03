@@ -281,6 +281,15 @@ export let currentBlock: VNode['dynamicChildren'] = null
  *
  * @private
  */
+
+// <Foo ref="foo" type="text" />
+// <Input ref="inputRef" type="text" v-if='a' />
+// return (_openBlock(), _createElementBlock(_Fragment, null, [
+//   _createVNode(_component_Foo, { ref: "foo", type: "text" }, null, 512 /* NEED_PATCH */),
+//   (_ctx.a)
+//     ? (_openBlock(), _createBlock(_component_Input, { key: 0, ref: "inputRef", type: "text" }, null, 512 /* NEED_PATCH */))
+//     : _createCommentVNode("v-if", true) ], 64 /* STABLE_FRAGMENT */))
+
 export function openBlock(disableTracking = false): void {
   blockStack.push((currentBlock = disableTracking ? null : []))
 }
@@ -355,9 +364,18 @@ export function createElementBlock(
       dynamicProps,
       shapeFlag,
       true /* isBlock */,
+      // false, /* needFullChildrenNormalization */ 这里不传, 有默认值 false
     ),
   )
 }
+
+// <Foo ref="foo" type="text" />
+// <Input ref="inputRef" type="text" v-if='a' />
+// return (_openBlock(), _createElementBlock(_Fragment, null, [
+//   _createVNode(_component_Foo, { ref: "foo", type: "text" }, null, 512 /* NEED_PATCH */),
+//   (_ctx.a)
+//     ? (_openBlock(), _createBlock(_component_Input, { key: 0, ref: "inputRef", type: "text" }, null, 512 /* NEED_PATCH */))
+//     : _createCommentVNode("v-if", true) ], 64 /* STABLE_FRAGMENT */))
 
 /**
  * Create a block root vnode. Takes the same exact arguments as `createVNode`.
@@ -436,12 +454,14 @@ const createVNodeWithArgsTransform = (
 const normalizeKey = ({ key }: VNodeProps): VNode['key'] =>
   key != null ? key : null
 
+// <Foo ref="foo" type="text" />
 // <input ref="input">
 // <ul>
 //   <li v-for="item in list" ref="items" key="item.id">
 //     {{ item }}
 //   </li>
 // </ul>
+// _createVNode(_component_Foo, { ref: "foo", type: "text" }, null, 512 /* NEED_PATCH */),
 // _createElementVNode("input", { ref: "input" }, null, 512 /* NEED_PATCH */),
 // _createElementVNode("ul", null, [
 //   (_openBlock(true), _createElementBlock(_Fragment, null, _renderList(_ctx.list, (item) => {
@@ -474,6 +494,7 @@ const normalizeRef = ({
   ) as any
 }
 
+// 别名: createElementVNode, 专门用在 vue 模板的编译中
 function createBaseVNode(
   type: VNodeTypes | ClassComponent | typeof NULL_DYNAMIC_COMPONENT,
   props: (Data & VNodeProps) | null = null,
@@ -482,6 +503,10 @@ function createBaseVNode(
   dynamicProps: string[] | null = null,
   shapeFlag: number = type === Fragment ? 0 : ShapeFlags.ELEMENT,
   isBlockNode = false,
+  // 若是来自 vue 的模板编译创建的 vnode, 则是不需要进行 vnode 的 children 的 normalization
+  // 这是因为 vue 的模板编译时, 在 ast 拼接字符串时, 已经确保 vnode 的 children 是 nomal 的
+  // 但是若是 通过 用户的 h 函数创建的 vnode, 那么则需要对 children 进行 normalization, 这是因为
+  // 用户创建的 vnode , 其 children 可以非常灵活, 需要进行 normalization
   needFullChildrenNormalization = false,
 ): VNode {
   const vnode = {
@@ -511,6 +536,12 @@ function createBaseVNode(
     dynamicProps,
     dynamicChildren: null,
     appContext: null,
+    // 只有组件才有 subTree, 调用组件的 render 函数时设置 currentRenderingInstance 为
+    // 创建 vnode 时, 对应的组件
+    // const prev = setCurrentRenderingInstance(i)
+    // subtTree = instance.render() // 在创建 组件的 subTree(vnode) 时, 组件实例
+    // 这里的 vnode.ctx 在组件的 调用 instance.render() 函数时进行设置
+    // setCurrentRenderingInstance(prev)
     ctx: currentRenderingInstance,
   } as VNode
 
@@ -562,6 +593,31 @@ function createBaseVNode(
 
 export { createBaseVNode as createElementVNode }
 
+// 这里是暴露给外部 h 函数的, 故这里的 patchFlag 默认为 0, dynamicProps 为 null, isBlockNode 为 false
+// h(a, null, [...]) -> createVNode(a, null, children, 0, null, false)
+// h 函数只接受 3 个参数 内部调用 createVNode(),
+// 后面的三个参数(patchFlag, dynamicProps, isBlockNode)传入默认值 是专门正对 vue 模板编译函数的, 正对的是
+// 模板编译时的优化参数(flags), 与运行时无关, h 函数就是手动创建运行时的 vnode 函数, 这也就是 vue jsx 中调用
+// 的 h 函数
+// h(type, propsOrChildren, children) {
+//   (type, propsOrChildren, children) {
+//     return createBaseVNode(
+//       type,
+//       props,
+//       children,
+//       0, /* patchFlag */,
+//       null, /* dynamicProps */,
+//       shapeFlag,
+//       false, /* isBlockNode */,
+//       这里是 h/createVNode 函数, 是用户手动创建的 vnode, 故这里需要 children normalization
+//       true /* needFullChildrenNormalization */,
+//     }
+//   }
+// }
+// <Foo ref="foo" type="text" />
+// _createVNode(_component_Foo, { ref: "foo", type: "text" }, null, 512 /* NEED_PATCH */),
+// 模板编译时, 遇到组件, 也会调用 createVNode
+// createVNode 被调用, 那么 needFullChildrenNormalization 总是为 true
 export const createVNode = (
   __DEV__ ? createVNodeWithArgsTransform : _createVNode
 ) as typeof _createVNode
@@ -653,15 +709,25 @@ function _createVNode(
     )
   }
 
+  // <Foo ref="foo" type="text" />
+  // _createVNode(_component_Foo, { ref: "foo", type: "text" }, null, 512 /* NEED_PATCH */),
+  // 模板编译时, 遇到组件, 也会调用 createVNode, 此时 needFullChildrenNormalization 则是显式的传入 true
+  // 也就是对于模板中的组件, needFullChildrenNormalization 为 true
   return createBaseVNode(
     type,
     props,
     children,
-    patchFlag,
-    dynamicProps,
+    patchFlag, // 0
+    dynamicProps, // null
     shapeFlag,
-    isBlockNode,
-    true,
+    isBlockNode, // false
+    // 若是来自 vue 的模板编译创建的 vnode, 则是不需要进行 vnode 的 children 的 normalization
+    // 这是因为 vue 的模板编译时, 在 ast 拼接字符串时, 已经确保 vnode 的 children 是 nomal 的
+    // 但是若是 通过 用户的 h 函数创建的 vnode, 那么则需要对 children 进行 normalization, 这是因为
+    // 用户创建的 vnode , 其 children 可以非常灵活, 需要进行 normalization
+    // 同时注意 模板中若是组件, 也是会调用 createVNode, 这里需要 needFullChildrenNormalization 设置为 true
+    // createVNode 被调用, 那么 needFullChildrenNormalization 总是为 true
+    true /* needFullChildrenNormalization */,
   )
 }
 

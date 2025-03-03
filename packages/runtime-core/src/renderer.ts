@@ -385,6 +385,7 @@ function baseCreateRenderer(
       return
     }
 
+    // <Foo v-if="show">
     // _createCommentVNode("v-if", true) -> v-if 为 false, 会创建一个空的 vnode
     // 所以不会出现 patch(n1, null), 即使 v-if 为 false, 这里的 n2 也会是一个空的不同类型的 vnode
 
@@ -2404,6 +2405,7 @@ function baseCreateRenderer(
     container._vnode = vnode
     if (!isFlushing) {
       isFlushing = true
+      // 这里是根组件的 hooks(mounted, ...) 的执行
       flushPreFlushCbs()
       flushPostFlushCbs()
       isFlushing = false
