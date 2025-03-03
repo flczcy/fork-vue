@@ -252,12 +252,18 @@ export function queuePostFlushCb(cb: SchedulerJobs): void {
   queueFlush()
 }
 
-// 执行 queue 中的 带有 PRE 标识的 job, 执行完后从队列中移除该函数
+// 执行 queue 中的 所有的带有 PRE 标识的 job, 执行完后从队列中移除该函数
 export function flushPreFlushCbs(
   instance?: ComponentInternalInstance,
   seen?: CountMap,
   // skip the current job
   i: number = flushIndex + 1,
+  // 这里 flushIndex 的初始值为 -1，所以即使这里不在 queue job 执行里面调用也是可以的
+  // 1. job 外部调用，那么此时的 flushIndex 为 -1，这里再 +1 就是 0 也不会导致数组越界
+  // 2. job 内部调用，此时的 flushIndex 就是当前正在执行的 job 在队列中的 index，所以这里 + 1
+  //    表示从下一个 job 开始逐个查找 PRE 标识的 job 进行同步执行
+  //    此时会阻塞当前正在执行的 job, 直到队列中所有的 job.PRE 执行完毕后，才会继续往下执行当前 job
+  //    同时注意 job.PRE 执行完一次后就会从队列中移除
 ): void {
   if (__DEV__) {
     seen = seen || new Map()

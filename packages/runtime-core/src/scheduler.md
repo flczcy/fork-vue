@@ -128,7 +128,7 @@ dep.trigger() {
         }
       } else {
         // 注意这里的插入是从 flushIndex 开始插入, 前面执行过了的 job, 不再考虑
-        // flushIndex 表示当前正在执行的那个 job 再 queue 中所在的索引
+        // flushIndex 表示当前正在执行的那个 job 在 queue 中所在的索引
         // 不是每次都从头开始查找插入的
         queue.splice(findInsertionIndex(jobId), 0, job)
       }
@@ -143,13 +143,16 @@ dep.trigger() {
           // 需要等 这里的 flushJobs 函数执行完后, 才会执行 nextTick()
           // flushJobs 函数执行完, 标识 queue, pendingPostFlushCbs 中的队列已经清空了
           try {
+            // flushIndex == 3
             // [1, 3, 5, 7]
             //     |
             //     flushIndex
             //     queueJob(6) -> 只能在 flushIndex 后面进行插入
             // [1, 3, 5, 6, 7]
             //     |flushIndex
-            for (flushIndex = 0; flushIndex < queue.length; flushIndex++) {
+            //     queueJob(2) -> 只能在 flushIndex 后面进行插入, 即使这里的 2 比 3 小, 也要插入在 3 的后面
+            // [1, 3, 2, 5, 6, 7]
+          for (flushIndex = 0; flushIndex < queue.length; flushIndex++) {
               const job = queue[flushIndex]
               // job 没有 DISPOSED 标识, 表示没有被废弃
               if (job && !(job.flags! & SchedulerJobFlags.DISPOSED)) {
@@ -239,7 +242,24 @@ dep.trigger() {
                       if (currentFlushPromise) return
                     }
                   }
-                  // 这里面也可以调用 flushPostFlushCbs 执行 通过 queuePostFlushCb(cb) 注册的函数
+                  // 在 job 内部执行 所有的带有 PRE 标识的 job, 执行完后从队列中移除该函数
+                flushPreFlushCbs(instance， seen, i = flushIndex + 1) {
+                  // 这里 flushIndex 的初始值为 -1，所以即使这里不在 queue job 执行里面调用也是可以的
+                  // 1. job 外部调用，那么此时的 flushIndex 为 -1，这里再 +1 就是 0 也不会导致数组越界
+                  // 2. job 内部调用，此时的 flushIndex 就是当前正在执行的 job 在队列中的 index，所以这里 + 1
+                  //    表示从下一个 job 开始逐个查找 PRE 标识的 job 进行同步执行
+                  //    此时会阻塞当前正在执行的 job, 直到队列中所有的 job.PRE 执行完毕后，才会继续往下执行当前 job
+                  //    同时注意 job.PRE 执行完一次后就会从队列中移除
+                  for (; i < queue.length; i++) {
+                    const cb = queue[i]
+                    if (cb && cb.flags! & SchedulerJobFlags.PRE) {
+                      queue.splice(i, 1) // 从 queue 中移除
+                      i--
+                      cb()
+                    }
+                  }
+                }
+                // 这里面也可以调用 flushPostFlushCbs 执行 通过 queuePostFlushCb(cb) 注册的函数
                   // 进行提前执行，不过这里面一般是组件更新函数，通常不在这里执行 flushPostFlushCbs
                   // 不过 watch 的更新函数，可能会会这么执行
                   flushPostFlushCbs() { }
@@ -274,104 +294,103 @@ dep.trigger() {
             flushIndex = -1
             queue.length = 0
 
-            flushPostFlushCbs() {
-              if (pendingPostFlushCbs.length === 0) return
-              // 去重排序
-              const deduped = [...new Set(pendingPostFlushCbs)].sort( (a, b) => getId(a) - getId(b))
-              pendingPostFlushCbs.length = 0
-              if (activePostFlushCbs) {
-                activePostFlushCbs.push(...deduped)
-                return
-              }
-              activePostFlushCbs = deduped
-              for (
-                postFlushIndex = 0;
-                postFlushIndex < activePostFlushCbs.length;
-                postFlushIndex++
-              ) {
-                const cb = activePostFlushCbs[postFlushIndex]
-                if (cb.flags! & SchedulerJobFlags.ALLOW_RECURSE) {
-                  cb.flags! &= ~SchedulerJobFlags.QUEUED
-                }
-                // 若是没有 DISPOSED 标识, 则执行 cb()
-                if (!(cb.flags! & SchedulerJobFlags.DISPOSED)) cb() {
-                  // 注意此时在 flushPostFlushCbs 中执行 queueJob，说明之前的 queue 已经执行完清空了
-                  // 那么此时的 queue.length = 0, flushIndex = -1 已经重置了
-                  queueJob(job) {
-                    if ((job.flags! & SchedulerJobFlags.QUEUED)) return
-                    const jobId = getId(job) // number or Infinity
-                    queue.splice(findInsertionIndex(jobId), 0, job)
-                    job.flags! |= SchedulerJobFlags.QUEUED
-                    queueFlush() {
-                      // 这里的 currentFlushPromise 有值 直接 return
-                      if (currentFlushPromise) return
-                    }
-                  }
-                  // 执行中动态新增 cb 不立即插入执行队列(activePostFlushCbs)执行,
-                  // 而是放入挂起队列(pendingPostFlushCbs) 中，等要当前执行队列(activePostFlushCbs)全部执行
-                  // 完后，再次调用 flushJobs() 执行
-                  // 但是有些列外：就是在动态执行中，临时插入的 cb.id === -1, 则不会放入
-                  // 挂起队列(pendingPostFlushCbs) 中，而是直接插队到下一个 cb 执行，这是属于 VIP 插队执行
-                  queuePostFlushCb(cb) {
-                    if(isArray(cb)) {
-                      // 此时若是数组，则会放入 pendingPostFlushCbs，而不会放入 activePostFlushCbs
-                      // 但是此时遍历 activePostFlushCbs 的 for 循环，所以这里 push 进入
-                      // pendingPostFlushCbs，并不会在 for 循环中得到执行
-                      // pendingPostFlushCbs 中的 cb
-                      // 需要等到本次的 activePostFlushCbs 队列中 cb 全部执行完后，再执行，
-                      // 就是移到当前执行的队列执行完后，再执行，不在本次队列中执行，不允许插队
-                      pendingPostFlushCbs.push(...cb)
-                    } else {
-                      // 但是当 cb.id == -1, 时，只要有 activePostFlushCbs 则可以插队立即执行
-                      if (activePostFlushCbs && cb.id === -1) {
-                        // activePostFlushCbs 存在说明是属于执行中动态插入执行队列的，
-                        // cb.id == -1, 表示直接插对优先级最高，直接插入到本次 job 后面，
-                        // 即下一个就是执行这个插入的回调函数
-                        activePostFlushCbs.splice(postFlushIndex + 1, 0, cb)
-                      } else if (!(cb.flags! & SchedulerJobFlags.QUEUED)) {
-                        // 否则的话直接插入到 pendingPostFlushCbs 中，
-                        // 注意这里不是插入到正在执行的队列 activePostFlushCbs 中，所以这里的插入需要等到
-                        // 这里的 activePostFlushCbs 执行完后，再执行 flushJobs()
-                        // 就是移到当前执行的队列执行完后，再执行，不在本次队列中执行，不允许插队
-                        // 注意这里没有去重,是因为在调用 flushPostFlushCbs 内部会进行去重操作
-                        pendingPostFlushCbs.push(cb)
-                        cb.flags! |= SchedulerJobFlags.QUEUED
-                      }
-                    }
-                    queueFlush(){
-                      if (currentFlushPromise) return
-                    }
-                  }
-                  // cb 执行中，递归(调用自己)调用
-                  flushPostFlushCbs(){
-                    if (pendingPostFlushCbs.length === 0) return
-                    // 去重排序
-                    const deduped = [...new Set(pendingPostFlushCbs)].sort( (a, b) => getId(a) - getId(b))
-                    pendingPostFlushCbs.length = 0
-                    // 递归调用，此时的 activePostFlushCbs 还没有执行到设置为 null
-                    // 因为是递归调用，执行到一半，还未来得及将 activePostFlushCbs = null
-                    // 就又开始从头开始执行了，注意这里的 activePostFlushCbs 是全局变量
-                    if (activePostFlushCbs) {
-                      // 若是这个存在，说明是递归调用，将 pendingPostFlushCbs 去重后的 cbs, 直接放入到
-                      // activePostFlushCbs 最后面，等待 for 循环遍历执行，
-                      // 然后直接 return 避免陷入无限递归调用
-                      // 这里通过直接调用 flushPostFlushCbs() 本身 将 pendingPostFlushCbs 插入到
-                      // activePostFlushCbs 进行一次执行，
-                      // 后面一可以继续调用 flushPostFlushCbs() 来执行 挂起的 cb
-                      activePostFlushCbs.push(...deduped)
-                      return
-                    }
-                  }
-                }
-                // 执行完后,去掉 QUEUED 标识
+          flushPostFlushCbs() {
+            if (pendingPostFlushCbs.length === 0) return
+            // 去重排序
+            const deduped = [...new Set(pendingPostFlushCbs)].sort( (a, b) => getId(a) - getId(b))
+            pendingPostFlushCbs.length = 0
+            if (activePostFlushCbs) {
+              activePostFlushCbs.push(...deduped)
+              return
+            }
+            activePostFlushCbs = deduped
+            for (
+              postFlushIndex = 0;
+              postFlushIndex < activePostFlushCbs.length;
+              postFlushIndex++
+            ) {
+              const cb = activePostFlushCbs[postFlushIndex]
+              if (cb.flags! & SchedulerJobFlags.ALLOW_RECURSE) {
                 cb.flags! &= ~SchedulerJobFlags.QUEUED
               }
-              // 执行结束清空 activePostFlushCbs，但是若是递归调用，那么
-              // activePostFlushCbs， postFlushIndex 此时不会得到清空，
-              // 在递归调用中可以判断 activePostFlushCbs 不为 null
-              activePostFlushCbs = null
-              postFlushIndex = 0
+              // 若是没有 DISPOSED 标识, 则执行 cb()
+              if (!(cb.flags! & SchedulerJobFlags.DISPOSED)) cb() {
+                // 注意此时在 flushPostFlushCbs 中执行 queueJob，说明之前的 queue 已经执行完清空了
+                // 那么此时的 queue.length = 0, flushIndex = -1 已经重置了
+                queueJob(job) {
+                  if ((job.flags! & SchedulerJobFlags.QUEUED)) return
+                  const jobId = getId(job) // number or Infinity
+                  queue.splice(findInsertionIndex(jobId), 0, job)
+                  job.flags! |= SchedulerJobFlags.QUEUED
+                  queueFlush() {
+                    // 这里的 currentFlushPromise 有值 直接 return
+                    if (currentFlushPromise) return
+                  }
+                }
+                // 执行中动态新增 cb 不立即插入执行队列(activePostFlushCbs)执行,
+                // 而是放入挂起队列(pendingPostFlushCbs) 中，等要当前执行队列(activePostFlushCbs)全部执行
+                // 完后，再次调用 flushJobs() 执行
+                // 但是有些列外：就是在动态执行中，临时插入的 cb.id === -1, 则不会放入
+                // 挂起队列(pendingPostFlushCbs) 中，而是直接插队到下一个 cb 执行，这是属于 VIP 插队执行
+                queuePostFlushCb(cb) {
+                  if(isArray(cb)) {
+                    // 此时若是数组，则会放入 pendingPostFlushCbs，而不会放入 activePostFlushCbs
+                    // 但是此时遍历 activePostFlushCbs 的 for 循环，所以这里 push 进入
+                    // pendingPostFlushCbs，并不会在 for 循环中得到执行
+                    // pendingPostFlushCbs 中的 cb
+                    // 需要等到本次的 activePostFlushCbs 队列中 cb 全部执行完后，再执行，
+                    // 就是移到当前执行的队列执行完后，再执行，不在本次队列中执行，不允许插队
+                    pendingPostFlushCbs.push(...cb)
+                  } else {
+                    // 但是当 cb.id == -1, 时，只要有 activePostFlushCbs 则可以插队立即执行
+                    if (activePostFlushCbs && cb.id === -1) {
+                      // activePostFlushCbs 存在说明是属于执行中动态插入执行队列的，
+                      // cb.id == -1, 表示直接插对优先级最高，直接插入到本次 job 后面，
+                      // 即下一个就是执行这个插入的回调函数
+                      activePostFlushCbs.splice(postFlushIndex + 1, 0, cb)
+                    } else if (!(cb.flags! & SchedulerJobFlags.QUEUED)) {
+                      // 否则的话直接插入到 pendingPostFlushCbs 中，
+                      // 注意这里不是插入到正在执行的队列 activePostFlushCbs 中，所以这里的插入需要等到
+                      // 这里的 activePostFlushCbs 执行完后，再执行 flushJobs()
+                      // 就是移到当前执行的队列执行完后，再执行，不在本次队列中执行，不允许插队
+                      pendingPostFlushCbs.push(cb)
+                      cb.flags! |= SchedulerJobFlags.QUEUED
+                    }
+                  }
+                  queueFlush(){
+                    if (currentFlushPromise) return
+                  }
+                }
+                // cb 执行中，递归(调用自己)调用
+                flushPostFlushCbs(){
+                  if (pendingPostFlushCbs.length === 0) return
+                  // 去重排序
+                  const deduped = [...new Set(pendingPostFlushCbs)].sort( (a, b) => getId(a) - getId(b))
+                  pendingPostFlushCbs.length = 0
+                  // 递归调用，此时的 activePostFlushCbs 还没有执行到设置为 null
+                  // 因为是递归调用，执行到一半，还未来得及将 activePostFlushCbs = null
+                  // 就又开始从头开始执行了，注意这里的 activePostFlushCbs 是全局变量
+                  if (activePostFlushCbs) {
+                    // 若是这个存在，说明是递归调用，将 pendingPostFlushCbs 去重后的 cbs, 直接放入到
+                    // activePostFlushCbs 最后面，等待 for 循环遍历执行，
+                    // 然后直接 return 避免陷入无限递归调用
+                    // 这里通过直接调用 flushPostFlushCbs() 本身 将 pendingPostFlushCbs 插入到
+                    // activePostFlushCbs 进行一次执行，
+                    // 后面一可以继续调用 flushPostFlushCbs() 来执行 挂起的 cb
+                    activePostFlushCbs.push(...deduped)
+                    return
+                  }
+                }
+              }
+              // 执行完后,去掉 QUEUED 标识
+              cb.flags! &= ~SchedulerJobFlags.QUEUED
             }
+            // 执行结束清空 activePostFlushCbs，但是若是递归调用，那么
+            // activePostFlushCbs， postFlushIndex 此时不会得到清空，
+            // 在递归调用中可以判断 activePostFlushCbs 不为 null
+            activePostFlushCbs = null
+            postFlushIndex = 0
+          }
 
             // 是否应放在 flushJobs() 后面，即函数最后，否则这里在 调用 flushJobs() 将
             // currentFlushPromise 置为 null，会导致 flushJobs() 中的 queueJob(job) 时执行
