@@ -265,6 +265,27 @@ export interface VNode<
 export const blockStack: VNode['dynamicChildren'][] = []
 export let currentBlock: VNode['dynamicChildren'] = null
 
+// blockTree - 收集子元素中的动态节点 - 将子节点的动态节点间(嵌套)收集到数组,进行扁平化
+// diff children 时,只需要 diff 这些收集的动态子节点即可
+// 1) 模板编译优化, 增添了 patchFlag 标识具体的 vnode 节点
+// 2) block 收集这些被打上 patchFlag 的 vnode, 对于不稳定的节点(vif,vfor)等实现 blockTree 嵌套的收集
+// 以上 block tree 为靶向更新优化
+// 除了 block 的靶向优化外, 还有 静态提升,函数缓存,预解析字符串
+
+// const vnode =
+// (_openBlock(),
+// _createElementBlock('div', null, [
+//   _createElementVNode('h1', null, 'Hi'),
+//   _createElementVNode(
+//     'span',
+//     { class: _ctx.state.className },
+//     _toDisplayString(_ctx.state.id),
+//     1 | 2 /* TEXT,CLASS */,
+//   ),
+// ]))
+
+// 用一个数组来收集多个动态节点
+
 /**
  * Open a block.
  * This must be called before `createBlock`. It cannot be part of `createBlock`
@@ -281,6 +302,18 @@ export let currentBlock: VNode['dynamicChildren'] = null
  *
  * @private
  */
+
+// 一个组件,其模板中会有多个动态节点, 在组件创建模板中各个 vnode 时, 将有动态节点的 vnode 进行收集, 后面组件更新时,
+// 直接进行动态节点的逐个 patch 即可, 其他静态节点则无需 patch
+// 每一个组件都是一个根 block, 因为其要收集 subTree 也即
+// render 函数中的动态节点(模板编译传入的 patchFlag > 0 的节点, 看作是动态节点)
+// 如何识别一个动态节点? 这是 vue 模板编译时, 通过 ast 词法分析字符串结构解析出的, 解析出不同的 token 的类型, 设置
+// 不同的 PatchFlags, 只要是有动态节点, 不管是何种类型的动态节点, 那么设置的 patchFlag 至少是 > 0 的. 对于静态
+// 节点, patchFlag 则为默认值 0.
+// 所以组件的 render 函数(通过模板编译的,不是自己手动写的)都是 openBlock() 开始, 因为组件就是一个 block, 里面
+// 有动态节点, 这是针对组件进行的, 执行创建的 createBaseVNode(... patchFlag), 判断传入的 patchFlag > 0 来将
+// 此创建的 vnode 放入 vnode.dynamicChildren 中, 即 dynamicChildren 中都是当前组件的所有 vnode
+// 中的 vnode.patchFlag > 0 的节点, 这里面进行了扁平化
 
 // <Foo ref="foo" type="text" />
 // <Input ref="inputRef" type="text" v-if='a' />
@@ -309,6 +342,10 @@ export let isBlockTreeEnabled = 1
  * Block tracking sometimes needs to be disabled, for example during the
  * creation of a tree that needs to be cached by v-once. The compiler generates
  * code like this:
+ * 默认, 组件(模板编译的)会自动收集内部的所有的动态节点到 dynamicChildren, 那么如何排除某个 vnode 不被动态节点收集呢?
+ * 这里的案例是, 并不是组件的所有的动态节点都需要放入 dynamicChildren, 若是我只想要某一个特殊的动态节点
+ * 不放入 dynamicChildren 中呢 ?
+ * 这个可以通过在创建这个 vnode 前, 先禁止 disable blocking, 创建完后, 再开启 enable blocking
  *
  * ``` js
  * _cache[1] || (
@@ -593,6 +630,12 @@ function createBaseVNode(
 
 export { createBaseVNode as createElementVNode }
 
+// vue 的 vnode 其实是分为 两类:
+// 一类是来自模板创建的 vnode
+//   模板创建的 vnode 会有动态节点/静态节点的优化标识(即 patchFlag), 可以进行 fast path 比对更新
+// 一类是来自用户手写的 render 函数中创建的 vnode
+//   用户通过 手写 render 函数创建的 vnode, 则没有任何优化标识, 需要深度遍历比对更新
+
 // 这里是暴露给外部 h 函数的, 故这里的 patchFlag 默认为 0, dynamicProps 为 null, isBlockNode 为 false
 // h(a, null, [...]) -> createVNode(a, null, children, 0, null, false)
 // h 函数只接受 3 个参数 内部调用 createVNode(),
@@ -738,6 +781,17 @@ export function guardReactiveProps(
   return isProxy(props) || isInternalObject(props) ? extend({}, props) : props
 }
 
+// 什么场景需要使用 cloneVNode? 这里的 cloneVNode 作用是什么?
+// n1 - render(h('li', {class: 'foo'}, '1'), app)
+// n2 - render(h('li', {class: 'bar'}, '2'), app)
+// 第一次渲染创建 vnode n1, 第二次渲染创建 vnode n2 - 进行 patch(n1, n2)
+//   - 若是不进行 cloneVNode(n1) 那么每次 更新 render 都要执行 createVNode('li'...),
+//     每次都创建一个新的 vnode(对象) 需要分配内存 性能相对复制已经创建的 vnode n1 要低
+//   - 若是更新,说明组件已经挂载,第二次以及之后的 render(h(...)) 就不再去创建新的 vnode 了,直接复用之前创建的
+//     vnode, 相比之前创建的 vnode, 只是 n2 的 props 会变化, 将这些变化的部分更新到复制的 vnode
+//   - 创建 vnode 不涉及到组件的生命周期钩子函数, 基本上每次更新都会创建新的 vnode 进行 patch, 不过 vue 内部
+//     对于已经挂载过的 vnode 会进行复用, 避免了每次更新都创建新的 vnode 对象(分配内存)
+//   - 对于静态 vnode, 则可以完全复用(clone)之前的 vnode, 而不是创建新的 vnode
 export function cloneVNode<T, U>(
   vnode: VNode<T, U>,
   extraProps?: (Data & VNodeProps) | null,
@@ -870,6 +924,8 @@ export function createCommentVNode(
     : createVNode(Comment, null, text)
 }
 
+// null, true, false, undefined -> createVNode(Comment) - empty placeholder
+// [vnode, 'txt', Text, true, null]
 export function normalizeVNode(child: VNodeChild): VNode {
   if (child == null || typeof child === 'boolean') {
     // empty placeholder
@@ -906,27 +962,70 @@ export function normalizeChildren(vnode: VNode, children: unknown): void {
   if (children == null) {
     children = null
   } else if (isArray(children)) {
+    // [h(Foo, null, {}), h(div, 'hi', []), h(Text, 1)]
+    // 若是数组, 也会先执行数组里面的 h 函数, 返回具体的 vnode
+    // 所以数组里面的元素已经先执行了 normalizeChildren(vnode), 通过每个元素执行的 h 函数
+    // 数组同时说明每个数组元素已经执行过了 normalizeChildren
     type = ShapeFlags.ARRAY_CHILDREN
   } else if (typeof children === 'object') {
     if (shapeFlag & (ShapeFlags.ELEMENT | ShapeFlags.TELEPORT)) {
+      // 元素 vnode, children 传入的为对象
+      // h(div, null, {
+      //   header: () => h('p', 'hader'),
+      //   footer: () => h('p', 'footer'),
+      //   default: () => h('p', 'default')
+      // })
       // Normalize slot to plain children for plain element and Teleport
       const slot = (children as any).default
       if (slot) {
         // _c marker is added by withCtx() indicating this is a compiled slot
-        slot._c && (slot._d = false)
+        // _d disable block tracking 标志用于指示是否需要禁用块跟踪(block tracking)
+        slot._c && (slot._d = false) // enabled block tracking
         normalizeChildren(vnode, slot())
-        slot._c && (slot._d = true)
+        slot._c && (slot._d = true) // disable block tracking
       }
       return
     } else {
+      // 传入的是对象表示插槽
+      // h(Com, null, {
+      //   header: () => h('p', 'hader'),
+      //   footer: () => h('p', 'footer'),
+      //   default: () => h('p', 'default')
+      // })
+      // 标记此 vnode shapeFlag 为带有插槽的 vnode
+      // 只有组件才会有 slot, 所以这个 vnode 一定是一个组件 vnode
       type = ShapeFlags.SLOTS_CHILDREN
+      // _ 标识标识这里的 slot 对象是来自编译器生成的 slot, 不是用户 h 函数手动创建的 slot
       const slotFlag = (children as RawSlots)._
+      // 这里通过模板编译调用传入的 children 是有 _ 标识的, 那么这里就不会设置 _ctx 属性
       if (!slotFlag && !isInternalObject(children)) {
         // if slots are not normalized, attach context instance
         // (compiled / normalized slots already have context)
+        // <Foo ref='foo'>
+        //   default
+        //   <template #foo>foo</template>
+        // </Foo>
+        // compiled:
+        // h(Foo, {ref: 'foo'}, {
+        //   foo: _withCtx(() => [_createTextVNode('foo')]),
+        //   default: _withCtx(() => [_createTextVNode(" default ")], undefined, true),
+        //   _: 1 /* STABLE */
+        // })
+        // withCtx(fn, ctx = currentRenderingInstance, isNonScopedSlot)
         ;(children as RawSlots)._ctx = currentRenderingInstance
       } else if (slotFlag === SlotFlags.FORWARDED && currentRenderingInstance) {
-        // a child component receives forwarded slots from the parent.
+        // parent:
+        // <div>
+        //   <Bar> <slot> </Bar> slot 作为组件 Bar 的 slot
+        //         |-> 这里的 slot 是由 parent 中传入的 slot 决定的,
+        //             所以这里 Bar.slots 的 stable 也是由 parent 决定的
+        // </div>
+        // <Parent> 2 </Parent> -> <Bar> 1 </Bar> -> 最终传入到 Bar 组件中 slot
+        // 至于这里的 slot 节点是否有动态节点,也是通过编译器进行词法结构分析设置的, 若是静态的 slot vnode, 那么
+        // slots._ 就等于 SlotFlags.STABLE, 否则有动态 slots 中有动态节点, 那么
+        // slots._ 就等于 SlotFlags.DYNAMIC,
+        // 同时若是转发的 slots, 那么其 children 的 _ 也是与父节点的 slots_ 一致
+        // a child component receives forwarded slots(插槽转发) from the parent.
         // its slot type is determined by its parent's slot type.
         if (
           (currentRenderingInstance.slots as RawSlots)._ === SlotFlags.STABLE

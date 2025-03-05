@@ -117,8 +117,17 @@ const normalizeObjectSlots = (
   slots: InternalSlots,
   instance: ComponentInternalInstance,
 ) => {
+  // ctx -> currentRenderingInstance
+  // for tracking slot owner instance. This is attached during
+  // normalizeChildren when the component vnode is created.
+  // _ctx 在组件 vnode 创建时:
+  // 在 normalizeChildren 函数中将 currentRenderingInstance 设置到 children._ctx 上
   const ctx = rawSlots._ctx
+  // 注意这里的 rawSlots 可以为 null/undefined, 因为
+  // for (const key in null) {} 不会报错
+  // for (const key in null) {} 也不会报错
   for (const key in rawSlots) {
+    // 排除 _, $stable
     if (isInternalKey(key)) continue
     const value = rawSlots[key]
     if (isFunction(value)) {
@@ -165,6 +174,8 @@ const assignSlots = (
   children: Slots,
   optimized: boolean,
 ) => {
+  // 这里的 children 可以为 null
+  // for (const key in null) {} 不会报错
   for (const key in children) {
     // #2893
     // when rendering the optimized slots by manually written render function,
@@ -181,19 +192,51 @@ export const initSlots = (
   children: VNodeNormalizedChildren,
   optimized: boolean,
 ): void => {
+  // instance.slots = createInternalObject()
+  // 下面修改的 slot 都是在修改 instance.slots
   const slots = (instance.slots = createInternalObject())
+  // HINT: 这里的 ShapeFlags.SLOTS_CHILDREN 保证了 children 不会是 null
   if (instance.vnode.shapeFlag & ShapeFlags.SLOTS_CHILDREN) {
+    // 传入 children 为对象
+    // _ 标识 来自编译器生成的 slots
     const type = (children as RawSlots)._
     if (type) {
+      // optimized: 默认值为: !!n2.dynamicChildren
       assignSlots(slots, children as Slots, optimized)
       // make compiler marker non-enumerable
       if (optimized) {
         def(slots, '_', type, true)
       }
     } else {
+      // h(Foo, null, {
+      //   foo: 1,
+      //   bar: () => 2,
+      //   car: () => [1, 'txt', null, vnode],
+      //   default: () => null
+      // })
+      // ==>
+      // h(Foo, null, {
+      //   foo: () => normalizeVNode(foo),
+      //   bar: () => normalizeVNode(bar()),
+      //   car: () => normalizeVNode(car()),
+      //   default: () => normalizeVNode(default())
+      // })
+
+      // NOTE: 这里的 传入 normalizeObjectSlots 的 children 可以为 null/undefined, 因为
+      // for (const key in null) {} 不会报错
+      // for (const key in null) {} 也不会报错
+
+      // 手写 render 函数传入的 slots
       normalizeObjectSlots(children as RawSlots, slots, instance)
     }
   } else if (children) {
+    // h(Foo, null, null)         -> h(Foo, null, { default: () => normalizeVNode(null)})
+    // h(Foo, null, 'hi')         -> h(Foo, null, { default: () => normalizeVNode('hi')})
+    // h(Foo, null, ['hi', null]) -> h(Foo, null, { default: () => normalizeVNode(['hi', null])})
+    // children 不是对象,
+    // 默认设置到 instance.slots.default = normalizeSlotValue(children)
+    // ShapeFlags.TEXT_CHILDREN  - 'text'
+    // ShapeFlags.ARRAY_CHILDREN - [vnode, Text, 'txt', ...]
     normalizeVNodeSlots(instance, children)
   }
 }

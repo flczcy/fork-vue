@@ -453,6 +453,7 @@ export function trigger(
     }
   }
 
+  // NOTE: 这里 startBatch 的嵌套
   startBatch()
 
   if (type === TriggerOpTypes.CLEAR) {
@@ -475,6 +476,7 @@ export function trigger(
         }
       })
     } else {
+      // void 0 === undefined
       // schedule runs for SET | ADD | DELETE
       if (key !== void 0 || depsMap.has(void 0)) {
         run(depsMap.get(key))
@@ -514,6 +516,26 @@ export function trigger(
       }
     }
   }
+
+  // dep.trigger() {
+  //   startBatch() ++
+  //   这里使用 dep.trigger() 递归执行,每次都会执行 startBatch(), 导致里面的 endBatch() 提前返回
+  //   只有最外层的 endBatch() 才会最终执行, 防止触发无限递归执行
+  //   dep.trigger() {
+  //     startBatch() ++
+  //     // ...
+  //     endBatch() -- 此时还缺少一次 --
+  //   }
+  //   endBatch() -- 正好等于 0, 可以执行更新了
+  // }
+  // startBatch()
+  // // 此处的 endBatch 会提前返回(return),
+  // endBatch() {
+  //   // 因为此时 batchDepth > 0
+  //   if (--batchDepth > 0) {
+  //     return
+  //   }
+  // }
 
   endBatch()
 }

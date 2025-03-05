@@ -180,7 +180,7 @@ dep.trigger() {
                     //    具体插入位置查看 findInsertionIndex 针对相同 id 的处理情况
                     //    特别要注意这里开启递归插入后，需要设置递归退出条件，否则会无限递归插入
                     //    [a,b,c,d]
-                    //       | 当前之前 job b, 然后插入相同的 job b, 假设 job b 设置了 ALLOW_RECURSE
+                    //       | 当前执行的 job b, 然后插入相同的 job b, 假设 job b 设置了 ALLOW_RECURSE
                     //    [a,b,b,c,d]
                     //         | 然后 for 执行下一个 job, 这里又是上一次插入的 b, 此时执行到这里后，queueJob(b)
                     //           发现 b.ALLOW_RECURSE 存在，故插入到队列：[a,b,b,b,c,d]
@@ -191,6 +191,9 @@ dep.trigger() {
                     //    这就导致了无限的递归插入执行了，所以这里的递归退出条件就是
                     //    在某次递归后，将 b.ALLOW_RECURSE 移除，这样下次执行的 QUEUED 就不会移除，从而阻止其
                     //    重复加入到队列之中
+                    //    比如 foo.a = 1, 第一次执行 set 的更新, 第二次再次 set, 但是值不变, 还是 1, 此时
+                    //    不会再次触发 dep.trigger(), 就不会再次插入到队列,所以这就是递归的退出条件, 有限的递归
+                    //    但是 foo.a++, 每一次都是 set 触发更新, 每次都执行 queueJob() 这会导致无限更新
                     //    假设
                     //    job.flags! |= SchedulerJobFlags.ALLOW_RECURSE
                     //    queueJob(job) {

@@ -1187,6 +1187,21 @@ function baseCreateRenderer(
     }
   }
 
+  // 1. 创建组件 vnode,
+  // 2. 创建组件实例 instance, vnode.component = instance
+  // 3. 创建组件内部渲染 vnode, 即
+  //    setCurrentRenderingInstance(instance)
+  //    instance.subTree = instance.render() {
+  //      return createVNode(Foo, null, [
+  //         createVNode('h1'), // 这里面会执行多个 createVNode() 函数, 每个函数执行的上下文中都可以访问到
+  //                            // currentRenderingInstance 实例, 也就是创建这些 vnode 的组件实例
+  //         createVNode('h2'),
+  //         createVNode('h3'),
+  //         ...
+  //      ])
+  //    }
+  //    resetCurrentRenderingInstance()
+
   const mountComponent: MountComponentFn = (
     initialVNode,
     container,

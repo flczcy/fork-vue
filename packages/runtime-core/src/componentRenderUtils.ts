@@ -361,6 +361,15 @@ const isElementRoot = (vnode: VNode) => {
   )
 }
 
+// 一个组件要不要更新取决于两种情况:
+// 1. 组件内部的状态变化,触发更新
+// 2. 来自父组件的更新,需要比对父组件的 subTree,
+//    2.1 父组件传入给子组件的 props 变化了 - 需要更新
+//    2.2 父组件传入给子组件的 slots 变化了 - 需要更新
+//        如何区分传入的 slots 是动态的还是静态的?
+//        在模板编译中, 会通过 AST 词法分析来标记是否动态
+//        在手写的render 函数中, 统一设置为 动态, 即使实际传入为静态的, 也视为动态的,
+//        这样只要父组件有传入子组件 children, 也被视为需要更新
 export function shouldUpdateComponent(
   prevVNode: VNode,
   nextVNode: VNode,
@@ -377,11 +386,13 @@ export function shouldUpdateComponent(
     return true
   }
 
+  // vnode 有 vue 指令的, 需要更新
   // force child update for runtime directive or transition on component vnode.
   if (nextVNode.dirs || nextVNode.transition) {
     return true
   }
 
+  // optimized 默认为 !!n2.dynamicChildren
   if (optimized && patchFlag >= 0) {
     if (patchFlag & PatchFlags.DYNAMIC_SLOTS) {
       // slot content that references values that might have changed,
@@ -413,7 +424,10 @@ export function shouldUpdateComponent(
       if (!nextChildren || !(nextChildren as any).$stable) {
         return true
       }
+      // nextChildren 不存在 直接返回 true 无需比对 props
+      // nextChildren.$stable 不存在, 直接返回 true, 无需比对 props
     }
+    // nextChildren 存在, 并且 nextChildren.$stable 存在, 才需要进一步比对 props
     if (prevProps === nextProps) {
       return false
     }

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+    <title>Static Template</title>
+    <script src="./lib/vue.global.2787c34c.js"></script>
+  </head>
+  <body>
+    <style>
+      .load-mask {
+        background: #ccc;
+        bottom: 0;
+        left: 0;
+        opacity: 0.6;
+        position: fixed;
+        right: 0;
+        top: 0;
+        z-index: 100;
+      }
+    </style>
+    <div id="app">
+      <div v-for="i in 3" :key="i">
+        <label><input type="radio" v-model="id" :value="i" /> {{ i }}</label>
+      </div>
+      <child-component :id="id"></child-component>
+      <div class="load-mask" v-show="$loading.isLoading.value"></div>
+    </div>
+    <script>
+      (function () {
+        const ChildComponent = {
+          props: ["id"],
+
+          template: `
+            <div>
+              {{ id }}
+              <template v-if="$loading.isLoading.value">
+                - Loading
+              </template>
+              <button @click="loadData">Reload</button>
+            </div>
+          `,
+
+          methods: {
+            loadData() {
+              this.$loading.start();
+
+              // Pretend HTTP request
+              clearTimeout(this.timer);
+
+              this.timer = setTimeout(() => {
+                this.$loading.stop();
+              }, 2000);
+            }
+          },
+
+          watch: {
+            id: {
+              flush: "pre",
+              handler: "loadData"
+            }
+          }
+        };
+
+        const app = Vue.createApp({
+          components: {
+            ChildComponent
+          },
+
+          data() {
+            return {
+              id: 1
+            };
+          }
+        });
+
+        app.config.globalProperties.$loading = {
+          isLoading: Vue.ref(false),
+
+          start() {
+            this.isLoading.value = true;
+          },
+
+          stop() {
+            this.isLoading.value = false;
+          }
+        };
+
+        app.mount("#app");
+      })();
+    </script>
+  </body>
+</html>
