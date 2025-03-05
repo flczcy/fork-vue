@@ -1312,6 +1312,7 @@ function baseCreateRenderer(
     }
   }
 
+  // instance.effect, instance.update, instance.job
   const setupRenderEffect: SetupRenderEffectFn = (
     instance,
     initialVNode,
@@ -1601,6 +1602,8 @@ function baseCreateRenderer(
     instance.scope.off()
 
     const update = (instance.update = effect.run.bind(effect))
+
+    // 注意这里的 job 是更新前需要脏检查
     const job: SchedulerJob = (instance.job = effect.runIfDirty.bind(effect))
     job.i = instance
     job.id = instance.uid
@@ -1619,6 +1622,7 @@ function baseCreateRenderer(
         : void 0
     }
 
+    // 这里直接 run 无需脏检查
     update()
   }
 

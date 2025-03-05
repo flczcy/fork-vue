@@ -23,6 +23,8 @@ setup() {
         // 这样就保证了每次执行这些 lifecycle 注册的回调函数时,
         // 无论这些回调函数何时执行, 其内部可以通过 getCurrentInstance() 获取到对应组件的 instance
         const reset = setCurrentInstance(target)
+        // 执行用户注册 hook(), 不是立即执行,
+        // 这里是在包装函数里面, 具体执行, 由包装函数何时执行,这里的 hook 才会执行
         const res = callWithAsyncErrorHandling(hook, target, type, args)
         // 用户的 lifecycle 注册的回调函数执行完后,再次将 currentInstance 更新回去
         reset()

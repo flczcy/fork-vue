@@ -144,7 +144,11 @@ dep.trigger() {
               }
               return false
             }
-            if (dirty) return
+            if (!dirty) return
+            // 这里的 e.run 若是在组件中,就是组件的 instance.update 函数
+            // 每次父组件调用 instance.update() 函数时, 都是执行这里的 run 函数
+            // 会设置 RUNNING 标识, 后面避免在 instance.update() 中执行时, 触发 dep.trigger() 再次将执行中
+            // update 函数放入队列中, 导致重复更新
             e.run() {
               if (this.flags & EffectFlags.ACTIVE) return
               e.flags |= EffectFlags.RUNNING
@@ -215,7 +219,10 @@ dep.trigger() {
                     for (let link = this.subs; link; link = link.prevSub) {
                       const fromComputed = sub.notify(){
                         // NOTE: 这里的 return 不是退出 for, 而是退出这里的函数 notify(), 使其不执行 batch()
-                        if(sub.flags & Effect.flags.RUNNING) return
+                        if(sub.flags & Effect.flags.RUNNING) {
+                          // !ALLOW_RECURSE 从而不会将正在执行的 job 再次放入队列之中
+                          if(!(sub.flags & EffectFlags.ALLOW_RECURSE)) return
+                        }
                         if(sub.flags & Effect.flags.NOTIFIED) return
                         batch(sub) {
                           sub.flags |= EffectFlags.NOTIFIED
