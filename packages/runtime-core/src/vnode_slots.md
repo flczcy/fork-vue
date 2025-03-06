@@ -5,8 +5,11 @@
     <template #foo>{{ name }}</template>
     <template #default>default</template>
     <template #bar><slot name="bar" /></template>
+    <template #car><slot name="car" prop="car">car</slot></template>
   </Foo>
   <slot />
+  <slot name="a" prop="a" />
+  <slot name="b" prop="b">b</slot>
 </template>
 ```
 
@@ -48,11 +51,20 @@ export default {
                 default: _withCtx(() => _cache[0] || (_cache[0] = [_createTextVNode('default')])),
                 // 注意返回的是函数, 还不会立即执行
                 bar: _withCtx(() => [_renderSlot(_ctx.$slots, 'bar')]),
+                car: _withCtx(() => [
+                  _renderSlot(_ctx.$slots, 'car', { prop: 'car' }, () => [
+                    _cache[1] || (_cache[1] = _createTextVNode('car')),
+                  ]),
+                ]),
                 _: 3 /* FORWARDED */,
               },
               512 /* NEED_PATCH */,
             ),
             _renderSlot(_ctx.$slots, 'default'),
+            _renderSlot(_ctx.$slots, 'a', { prop: 'a' }),
+            _renderSlot(_ctx.$slots, 'b', { prop: 'b' }, () => [
+              _cache[1] || (_cache[1] = _createTextVNode('b')),
+            ]),
           ],
           64 /* STABLE_FRAGMENT */,
         )

@@ -18,12 +18,13 @@ app.mount(container) {
     }
     // 由于 root vnode 创建时, 没有传入 children 所以 root vnode 不涉及到 slots 的处理
     return vnode.children
-  }
+  };
   // 以上的 vnode 是在 root component 创建前创建的 所以在创建 root vnode 时,
   // currentRenderingInstance 没有被设置
   // 渲染 root vnode
   render(vnode, container) {
-    patch(container._vnode || null, vnode, container) {
+    patch(container._vnode || null, vnode, container, anchor = null, parentComponent = null) {
+      const { type, ref, shapeFlag } = vnode
       // 执行到 updateComponent 一定说明 n1, n2 是类型相同的 vnode, 否则执行不到这里
       // 因为 类型不同, 会将 n1 置为 null, 从而执行 mountComponent, 而不是这里的 updateComponent
       updateComponent(n1, n2, optimized) {
@@ -41,7 +42,8 @@ app.mount(container) {
           n2.el = n1.el
           instance.vnode = n2
         }
-      },
+      };
+
       mountComponent(vnode, container, anchor, parent) {
         const instance = createComponentInstance(initialVNode, parentComponent, parentSuspense) {
           const instance = {
@@ -51,22 +53,70 @@ app.mount(container) {
             type, vnode.type,
             subTree: null,
             parent: parent,
+            // state
+            ctx: EMPTY_OBJ,
+            data: EMPTY_OBJ,
+            props: EMPTY_OBJ,
+            attrs: EMPTY_OBJ,
+            slots: EMPTY_OBJ,
+            refs: EMPTY_OBJ,
+            setupState: EMPTY_OBJ,
+            setupContext: null,
             // 注意这里提前创建了 scope, detached 表示不会被 外部的 effect scope 进行收集
             // 比如嵌套的组件, 但是 组件里面的 scope 是不会被外部组件的 scope 进行收集的
             // 所以外部组件调用自己的 instance.scope.stop() 不会影响到子组件,只能对自己组件的 effect 进行管理
-            scope: new EffectScope(true /* detached */) {
-              this.parent = activeEffectScope
-                this._on = 0
-            },
+            scope: (new EffectScope(true /* detached */) {
+              this._on = 0;
+              this.parent = activeEffectScope;
+            }),
+            render: null,
+            proxy: null,
+            exposed: null,
+            exposeProxy: null,
+            withProxy: null,
+
+            ids: parent ? parent.ids : ['', 0, 0],
             provides: parent ? parent.provides : Object.create(appContext.provides),
+            accessCache: null!,
+            renderCache: [],
+
+            // resolved props and emits options
+            // 这里是定义在组件选项中的 props 注意和传入的 vnode.props 的区分
+            // 用户传入的 props 有多中形式, 统一成对象的形式
+            // ['foo', 'bar']  => {foo: { type: String, required: false, default: undefined, ...   }}
+            // { foo: String } => {foo: { type: String, required: false, default: undefined, ...   }}
+            // [{ foo: String }, {bar: Number, default: 0}] => { foo: {}, bar: { type: Number, default: 0 }}
+            propsOptions: normalizePropsOptions(type, appContext),
+            // ['a', 'b'] => { a: null, b: null}
+            // { a: () => {}, b: null }
+            // 定义组件暴露的事件函数, 当执行 emit('name') 需要满足时 emits 中定义的事件名称
+            emitsOptions: normalizeEmitsOptions(type, appContext),
+          }
+          if (__DEV__) {
+            instance.ctx = createDevRenderContext(instance)
+          } else {
+            instance.ctx = { _: instance }
+          }
+          instance.root = parent ? parent.root : instance
+          instance.emit = emit.bind(null, instance) => {
+            // 调用传入到 instance 中 props 中事件对应的函数
+            // <Foo v-on:my-event="onEvent">
+            // h(Foo, { onMyEvent: onEvent })
+            // const onEvent = (a, b, c) => { }
+            // instance.emit('my-event', 1, 2, 3) -> instance.props.onMyEvent(1, 2, 3)
           }
           return instance
         }
-        vnode.component = instance
+        vnode.component = instance;
 
         // resolve props and slots for setup context
         setupComponent(instance, false, optimized) => {
-          initProps(instance, props, isStateful, isSSR)
+          const isStateful = isStatefulComponent(instance) => {};
+          initProps(instance, props, isStateful, isSSR) {
+            // 初始化时, 将传入的 props 进行响应式处理
+            instance.props = shallowReactive(props)
+            instance.attrs = excludePropsOptions(props)
+          }
           initSlots(instance, children, optimized) {
             const slots = createInternalObject()
             instance.slots = slots
@@ -79,21 +129,105 @@ app.mount(container) {
                 const ctx = children._ctx
               }
             } else if (children) {
-              // ...
+              // 不是对象, 统一将其设置到 default 中
+              const normalized = normalizeSlotValue(children)
+              instance.slots.default = () => normalized
             }
           }
           // 注意第一个根组件执行到此处时,还没有设置 currentInstance, currentRenderingInstance
-          const setupResult = setupStatefulComponent(instance, isSSR){
+          const setupResult = isStateful ? setupStatefulComponent(instance, isSSR){
             const Component = instance.type as ComponentOptions
             // 0. create render proxy property access cache
-            instance.accessCache = Object.create(null)
+            instance.accessCache = Object.create(null) // 用户缓存优化 hasOwn 函数
             // 1. create public instance / render proxy
-            instance.proxy = new Proxy(instance.ctx, PublicInstanceProxyHandlers)
+            // 模板, render 函数中访问的变量 x 会直接加上 proxy.x 前缀
+            // instance.proxy.key -> instance.ctx.key
+            instance.proxy = new Proxy(instance.ctx, PublicInstanceProxyHandlers => ({
+              get(target, key) {
+                const instance = target._
+                // accessCache 的创建就是在 setupStatefulComponent()
+                // 即: instance.accessCache = Object.create(null)
+                const { ctx, setupState, data, props, accessCache, type, appContext } = instance
+                // proxy.xxx 取值顺序:
+                // 1. instance.setupState.xxx ->
+                // 2. instance.data.xxx ->
+                // 3. instance.props.xxx ->
+                // 4. instance.ctx.xxx
+                // 由于是在 `<h1>{{ proxy.xxx }}</h1>` (组件的 render)中, 会被频繁的读取
+                // 每次都会执行判断 hasOwn(target, key), 因为执行这两个 hasOwn 判断很费性能
+                // 所以这里将 hasOwn(target, key) 读取过的缓存结果进行缓存, 下次读取就不再需要再次执行 hasOwn 了
+                // 直接从目标对象读取 -> target(key)
+                // 这里的缓存主要是优化每次读取执行 hasOwn 的问题
+                if (key[0] !== '$') {
+                  const n = accessCache![key]
+                  if (n !== undefined) {
+                    // 有缓存 读取过 hasOwn 不在执行 hasOwn 操作
+                    switch (n) {
+                      case AccessTypes.SETUP:
+                        return setupState[key]
+                      case AccessTypes.DATA:
+                        return data[key]
+                      case AccessTypes.CONTEXT:
+                        return ctx[key]
+                      case AccessTypes.PROPS:
+                        return props![key]
+                      // default: just fallthrough
+                    }
+                  } else {
+                    // 没有缓存 proxy.xxx 存在于 setup() 返回的对象之中
+                    // setupState.xxx 优先级最高
+                    if((hasSetupBinding(setupState, key) => {
+                      return setupState !== EMPTY_OBJ && !setupState.__isScriptSetup && hasOwn(setupState, key)
+                    }) {
+                      // setupState 在后面的 handleSetupResult() 设置
+                      // instance.setupState = proxyRefs(setupResult)
+                      accessCache![key] = AccessTypes.SETUP
+                      return setupState[key];
+                    } else if(data !== EMPTY_OBJ && hasOwn(data, key)) {
+                      // instance.data 在 finishComponentSetup -> applyOptions 中设置
+                      // instance.data = reactive(data)
+                      accessCache![key] = AccessTypes.DATA
+                      return data[key]
+                    } else if(hasOwn(props, key)) {
+                      accessCache![key] = AccessTypes.PROPS
+                      return props![key]
+                    } else if (ctx !== EMPTY_OBJ && hasOwn(ctx, key)) {
+                      // instance.ctx = { _: instance, key: foo }
+                      accessCache![key] = AccessTypes.CONTEXT
+                      return ctx[key]
+                    } else if (!__FEATURE_OPTIONS_API__ || shouldCacheAccess) {
+                      accessCache![key] = AccessTypes.OTHER
+                    }
+                  }
+                }
+              },
+              set(target, key, value) {
+                const instance = target._
+                const { data, setupState, ctx } = instance
+                if (hasSetupBinding(setupState, key)) {
+                  setupState[key] = value
+                  return true
+                } else if (hasOwn(instance.props, key)) {
+                  __DEV__ && warn(`Attempting to mutate prop "${key}". Props are readonly.`)
+                  // 设置属性失败, 返回 false
+                  return false
+                } else {
+                  // 最终设置到 instance.ctx.[key] 中
+                  ctx[key] = value
+                }
+                return true
+              })
+            });
             // 2. call setup()
-            const { setup } = Component
+            const { setup } = Component;
             if (setup) {
               pauseTracking()
-              const setupContext = createSetupContext(instance) {
+              const setupContext = createSetupContext(instance) => {
+                // expose 通过 setup 函数参数暴露
+                // 用户在组件 sestup 函数中调用暴露出的 expose({}) 传入对象进去给 instance.exposed 设置值
+                const expose: SetupContext['expose'] = exposed => {
+                  instance.exposed = exposed || {}
+                };
                 return {
                   expose,
                   emit: instance.emit,
@@ -101,14 +235,19 @@ app.mount(container) {
                   slots: instance.slots,
                 }
               }
-              instance.setupContext = setupContext
+              instance.setupContext = setupContext;
               // 设置 currentInstance, 但是此时的 currentRenderingInstance 还未设置
-              const reset = setCurrentInstance(instance)
+              // 若是根组件, 那么此时的 currentRenderingInstance 还未设置
+              // 如是子组件, 那么此时的 currentRenderingInstance 已经设置,
+              // 就是父组件在创建 subTree 时, 已经设置了 currentRenderingInstance
+              const reset = setCurrentInstance(instance);
               // 执行 setup 函数
-              const setupResult = setup(instance.props, setupContext) {
+              // setup(props, { emit, slots, attrs, expose }) {}
+              const setupResult = setup(instance.props, setupContext) => {
                 // 用户组件 setup 函数可能写入的代码:
 
                 // issues: https://github.com/vuejs/core/issues/2043
+                // 同时在父组件中依赖 ctx.mgs.value
                 const ctx = inject('CONTEXT')
                 // not working (works when wrapped inside onBeforeMount)
                 ctx.msg.value = 'updated' => {
@@ -129,10 +268,16 @@ app.mount(container) {
                       // 插队执行, 当前正在执行的队列 [parentJob, childJob]
                       //                           | flushingIndex
                       queueJob(job) {
+                        // 组件的 job 都是有设置 ALLOW_RECURSE 标识,在创建组件时就已经设置了,
+                        // 故后面在子组件创建(setup)/更新(update)中触发的 dep.trigger() 都是可以将
+                        // parentJob 重复加入到队列中的,
+                        // 同时要意识,子组件的创建/更新都是在父组件的 job 中执行触发的.
+                        // 因为这里 parentJob.ALLOW_RECURSE, 所以可以重复插入自己到队列中
                         // [parentJob, parentJob, childJob]
                         //  | flushingIndex
                         // 当前的 parentJob 执行完后, 继续执行下一个 job, 又是 parentJob 自己
-                        // 因为这里 parentJob.ALLOW_RECURSE, 所以可以重复插入自己到队列中
+                        // [parentJob, parentJob, childJob]
+                        //             | flushingIndex
                         // 这样就又开始递归执行自己, 再次执行到 ctx.msg.value = 'updated', 此时的赋值操作
                         // 前后值相同, 则不会触发 dep.trigger -> queueuJob 就不会继续插队执行了,
                         // 而是执行队列下一个 job
@@ -141,20 +286,24 @@ app.mount(container) {
                   }
                 }
 
+                // instance.bm.push(() => fn())
                 // onBeforeMount(() => {
                 //   ctx.msg.value = 'updated'
                 // })
 
+                // instance.bu.push(() => fn())
+                onBeforeUpdate(() => {})
+
+                // instance.u.push(() => fn())
+                // 生命周期钩子函数注册: 会使用包装函数来进行传入参数 instance 闭包的捕获
                 onUpdated(() => {
                   // 会在 setup 函数执行完后执行, 这里传入执行时捕获的参数 在setup 执行中 instance 到 传入的
                   // 回调函数中, 即使 setup 执行完后, 重置了 currentInstance, 此时在此处的回调函数执行时
                   // 依然可以访问到 currentInstance
                 }, instance = getCurrentInstance())
 
-                onMounted(() => {
-
-                })
-
+                // instance.m.push(() => fn())
+                onMounted(() => {})
                 // 在 setup 函数执行的 watch 函数, 只是进行了一次依赖收集, 并没有触发 queueJob(job),
                 // 因为没有触发 dep.trigger, 若是在 watch 函数执行完后, 直接下 setup 函数中,
                 // 触发 dep.trigger, 那么会执行 queueJob(job) 放入到队列, 此时并不会立即这里的 job,
@@ -228,16 +377,19 @@ app.mount(container) {
                   }
                 }
                 return {}
-              }
+              };
               // setup 函数执行完后恢复上下文
-              resetTracking()
-              reset() // 重置 currentInstance
+              resetTracking();
+              reset(); // 重置 currentInstance
               // 设置 instance.render or instance.setupState
               handleSetupResult(instance, setupResult, isSSR) {
                 // setup 函数执行后, 返回一个函数
                 if (isFunction(setupResult)) {
                   instance.render = setupResult
                 } else if (isObject(setupResult)) {
+                  // NOTE: 这里将返回的对象进行 proxyRefs
+                  // {a: 1} -> proxy.a -> proxy.a.value
+                  // 这样在模板中访问 proxy.a 会自动代理返回 proxy.a.value 的值
                   instance.setupState = proxyRefs(setupResult)
                 } else if (__DEV__ && setupResult !== undefined) {
                   warn(
@@ -256,11 +408,44 @@ app.mount(container) {
                   if (__DEV__ && !Component.render && instance.render === NOOP && !isSSR) {
                     warn(`Component is missing template or render function: `, Component)
                   }
+                  // 选项式 API 其实就是内部将其放在 setup 函数后面执行选项定义的函数,比如 watch()
+                  // 就是将选项中的 options.watch() 放在 setup 函数内执行, 这个与直接从
+                  // import { watch } from 'vue'
+                  // setup() {
+                  //   watch() // 组合式 api
+                  //   options.watch() // 将选项中定义的 watch 提取出来也放在 setup 函数执行
+                  //   // 所以本质上, 选项式 API 其实内部就是基于组合式 API 实现的
+                  // }
+                  // support for 2.x options
+                  if (__FEATURE_OPTIONS_API__ && !(__COMPAT__ && skipOptions)) {
+                    const reset = setCurrentInstance(instance)
+                    pauseTracking()
+                    try {
+                      applyOptions(instance)
+                    } finally {
+                      resetTracking()
+                      reset()
+                    }
+                  }
+                }
+              }
+            } else {
+              finishComponentSetup() {
+                // support for 2.x options
+                if (__FEATURE_OPTIONS_API__ && !(__COMPAT__ && skipOptions)) {
+                  const reset = setCurrentInstance(instance)
+                  pauseTracking()
+                  try {
+                    applyOptions(instance)
+                  } finally {
+                    resetTracking()
+                    reset()
+                  }
                 }
               }
             }
-          }
-        }
+          } : null
+        };
 
         setupRenderEffect(instance, initialVNode, container, anchor, parentSuspense, namespace, optimized) => {
           // 挂载与更新统一调用这个函数
@@ -324,7 +509,35 @@ app.mount(container) {
                 setCurrentRenderingInstance(prev);
                 return result
               }
-              patch(null, subTree, container, anchor, instance /* parentComponent */);
+              patch(null, subTree, container, anchor, instance /* parentComponent */) => {
+                // 深度优先 -> 继续深度 patch 子组件 vnode
+                // 可以得知
+                // onBeforeMount -> onBeforeMount -> onBeforeMount
+                // onMounted     <- onMounted     <- onMounted
+                // 先创建父组件然后创建子组件... 最后一个子组件创建之后, 开始从最后一个子组件开始执行 onMounted
+                // onBeforeMount 由外往里进行捕获执行
+                // onMounted     由里往外进行冒泡执行
+                // 这里与 dom 事件处理机制类似:
+                // dom 事件传播机制:
+                // - 捕获阶段(Capture Phase):
+                //   当一个事件发生时，它首先从最外层的元素开始，然后逐级向下传递到具体的事件目标元素。
+                //   在这个阶段，事件会依次经过每个父元素，直到到达实际触发事件的目标元素。
+                // - 目标阶段(Target Phase):
+                //   这是事件到达具体触发它的那个DOM元素时所处的阶段。在这个阶段，事件会被传递给事件的实际目标，
+                //   并触发绑定在其上的所有事件处理函数。
+                // - 冒泡阶段(Bubble Phase): (浏览器事件监听器默认为: 冒泡阶段进行处理的)
+                //   在事件被目标元素处理之后，它会开始从目标元素向上逐级传播至其祖先元素，直到文档的根节点。
+                //   这是大多数开发者熟悉的默认行为。
+                bm && invokeArrayFns(bm)
+                patch(null, subTree, container, anchor, instance => {
+                  bm && invokeArrayFns(bm)
+                  patch(null, subTree, container, anchor, instance) => {
+                    bm && invokeArrayFns(bm)
+                  }
+                  m && queuePostFlushCb(m)
+                }
+                m && queuePostFlushCb(m)
+              }
               instance.subTree = subTree
               // 注意这里是 patch() 执行结束后, 才会设置 el 到 subTree.el
               initialVNode.el = subTree.el
@@ -333,13 +546,13 @@ app.mount(container) {
               instance.isMounted = true
             } else {
               // 更新
-              let { next, bu, u, parent, vnode } = instance
+              let { next, bu, u, parent, vnode } = instance;
               // updateComponent
               // This is triggered by mutation of component's own state (next: null)
               // OR parent calling processComponent (next: VNode)
-              let originNext = next
+              let originNext = next;
               // Disallow component effect recursion during pre-lifecycle hooks.
-              toggleRecurse(instance, false)
+              toggleRecurse(instance, false);
               // 这里在更新属性时, 关闭了 ALLOW_RECURSE, 避免设置属性触发重复的放入队列
               if (next) {
                 // from parent calling processComponent
@@ -483,8 +696,96 @@ app.mount(container) {
                       }
                     }
                   };
+                  // 关于 vue 中 slots 与 children 的区别?
+                  // 1. children 存在于 vnode 中, 而 slots 存在于 component 中
+                  // 2. children 可以是多种类型(string,null,array,vnode,object)
+                  //    slots 是通过对 vnode.children 各种类型进行统一转换为对象
+                  //    slots 是组件 vnode 在创建组件时通过对 vnode.children 进行统一处理之后的 vnode
+                  //    slots 只是组件中概念, 而 children 可以任意的 vnode (元素vnode,文本vnode,...)
+                  //    slots 只是组件vnode中的 children 的统一处理 { slotName: slotFn }
+                  // 旧的 slots, 与新的 slots
+                  // vue 组件的 slots 最终都是要作为组件的 subTree 的一部分, 所以在创建组件的
+                  // subTree = renderComponentRoot(instance){
+                  //   // 这里们需要将组件的 slots 进行创建为 vnode, 从而作为组件的 subTree 的一部分
+                  // }
+                  // slots 最终是组件 subTree 的一部分
                   updateSlots(instance, nextVNode.children, optimized) {
-
+                    const children = nextVNode.children
+                    // 这里的 slots 已经在组件 mount 中在 initSlots()
+                    // 已经将 instance.vnode.children 转换为 instance.slots
+                    // NOTE:
+                    // 在 mounted 中处理的 slots 是老的 vnode 中 children 转换而来的
+                    // 而这里的 children 时新创建的 vnode 的 children,
+                    // 这里新创建的 vnode.children 可能已经变化了,故需要重新进行转换(normlization)到新的 slots
+                    const { vnode, slots } = instance
+                    // 这里的 instance.slots 是老的 vnode 在 mounted 时已经处理的 slots
+                    // 而这里的 children 则是新创建的 nextVNode 中 children, 这里新传入的 children 也需要
+                    // 像老的 vnode 中 children 被处理(normalization), 才能转为组件的 slots
+                    // 老的 slots 已经进行 normalization
+                    // 新的 slots 需要重新 normalization
+                    // 这里的更新就是用新的 slots 覆写旧的 slots, 移除老的 slot
+                    // 即: Object.assign(instance.slots, children)
+                    // 最终得到 更新后的 instance.slots, 在下面的 renderComponentRoot() 函数中通过调用
+                    // const Foo = {
+                    //   template = `<div>
+                    //     <slot name="foo"/>
+                    //     <slot name="bar"/>
+                    //     <slot name="default"/>
+                    //   <div>`
+                    // }
+                    // const Bar = {
+                    //   template = `
+                    //   <Foo>
+                    //     <slot name="bar"/>
+                    //     <template v-slot:foo></template>
+                    //     <template v-slot:default></template>
+                    //   <Foo>`
+                    // }
+                    // const Car = `<Bar> <template v-slot:bar>bar</template> <Bar/>`
+                    // instances.render() {
+                    //   return h(Foo, null, {
+                    //     // 直接传递给组件 Foo 的 slot
+                    //     foo: _withCtx(() => [ _createTextVNode(_toDisplayString(_ctx.name), 1)]),
+                    //     default: _withCtx(() => _cache[0] || (_cache[0] = [_createTextVNode('')])),
+                    //     // Foo 组件中的 <slot name="bar"/> 称为 forward slot
+                    //     bar: _withCtx(() => [_renderSlot(_ctx.$slots, 'bar')]),
+                    //   })
+                    // }
+                    // 通过子组件的 renderSlot() 进行消费
+                    let needDeletionCheck = true
+                    let deletionComparisonTarget = EMPTY_OBJ
+                    // children 为对象
+                    if (vnode.shapeFlag & ShapeFlags.SLOTS_CHILDREN) {
+                      // 新的 children 需要重新进行 normalization
+                      const type = (children as RawSlots)._
+                      if(type) {
+                        // _ 标识 表明是来自组件模板编译的 slots, 已经进行了 normalization
+                        assignSlots(slots, children as Slots, optimized)
+                      } else {
+                        // 否则 children 需要进行 normalazation 转换到 slots
+                        needDeletionCheck = !(children as RawSlots).$stable
+                        normalizeObjectSlots(children as RawSlots, slots, instance)
+                      }
+                      // 这里的 children 时对象哦, 因为是在 ShapeFlags.SLOTS_CHILDREN 判断里面
+                      deletionComparisonTarget = children as RawSlots
+                    } else if (children) {
+                      // 新的 children 需要重新进行 normalization
+                      // non slot object children (direct value) passed to a component
+                      normalizeVNodeSlots(instance, children) {
+                        const normalized = normalizeSlotValue(children)
+                        instance.slots.default = () => normalized
+                      }
+                      deletionComparisonTarget = { default: 1 }
+                    }
+                    // delete stale slots
+                    if (needDeletionCheck) {
+                      for (const key in slots) {
+                        // 旧的 slotName 不在新的 slots 中, 需要从旧的 slots 中移除
+                        if (!isInternalKey(key) && deletionComparisonTarget[key] == null) {
+                          delete slots[key]
+                        }
+                      }
+                    }
                   }
 
                   pauseTracking();
@@ -514,7 +815,7 @@ app.mount(container) {
                 // 因为父组件没有更新, 也就是没有创建新的 subTree, 故当前组件的 vnode 就是之前父组件创建的 vnode
                 // NOTE: 子组件的 vnode 都是通过父组件创建的
                 next = vnode
-              }
+              };
               // 注意以上的 watch 更新会在 这里的 beforeUpdate hook 前面执行
               // beforeUpdate hook 这里是同步执行
               bu && invokeArrayFns(bu)
@@ -522,15 +823,177 @@ app.mount(container) {
               //  |
               //  flushingIndex
               toggleRecurse(instance, true)
-              const nextTree = renderComponentRoot(instance)
+              // 在 nextTree 的创建过程中, 若是有父组件传入的 slots,
+              // 那么在此过程中就会将父组件中的 slots 创建出(执行对应的 slots.xxx 函数)
+              // 对应的 vnode, 作为 subTree 的一部分 vnode 节点, 也就是最终 slots 也是作为 subTree 的一部分
+              // 进行 patch(prevTree, nextTree) 从而进行更新的
+              const nextTree = renderComponentRoot(instance) => {
+                let result;
+                let fallthroughAttrs;
+
+                // 设置 render 函数执行时的上下文 主要执行 h() 函数, 创建 vnode, 同时执行依赖搜集
+                // render = (proxy, cache, props, state, data, ctx) => h(Foo, { name: bar.name })
+                const prev = setCurrentRenderingInstance(instance);
+                const { render, props, setupState, renderCache, data, ctx, proxy } = instance;
+                const { inheritAttrs, slots, attrs, emit, vnode, type } = instance;
+                try {
+                  if (vnode.shapeFlag & ShapeFlags.STATEFUL_COMPONENT) {
+                    // 状态组件
+                    const proxyToUse = proxy;
+                    const thisProxy = proxyToUse;
+                    result = normalizeVNode(
+                      // 用户手写的 render() 可以返回 字符串, 数字, 数组, vnode, null, undefined, ...
+                      // 故这里需要 normalizeVNode 进行处理
+                      // render(_ctx, _cache, $props, $setup, $data, $options) {
+                      render.call(thisProxy, proxy, renderCache, props, setupState, data, ctx) => {
+                        const _ctx = proxy;
+                        const _cache = renderCache;
+                        const $props = props;
+                        const $setup = setupState;
+                        const $data = data;
+                        const $options = ctx // { _: instance }
+
+                        // 用户手写的渲染函数,或者模板编译后的函数
+                        // <template>
+                        //   <h1>title</h1>
+                        //   <Foo ref="foo">
+                        //     <template #foo>{{ name }}</template>
+                        //     <template #default>default</template>
+                        //     <!-- <slot /> 标签作为组件的 children 称为 forward slot 转发/代理 slot -->
+                        //     <template #bar><slot name="bar" /></template>
+                        //     <template #car><slot name="car" prop="car">car</slot></template>
+                        //   </Foo>
+                        //   <slot />
+                        //   <slot name="a" prop="a" />
+                        //   <slot name="b" prop="b">b</slot>
+                        // </template>
+                        return (
+                          _openBlock(),
+                          _createElementBlock(
+                            _Fragment,
+                            null,
+                            [
+                              // prettier-ignore
+                              _cache[1] || (_cache[1] = _createElementVNode("h1", null, "title", -1 /* HOISTED */)),
+                              _createVNode(
+                                _component_Foo,
+                                { ref: 'foo' },
+                                {
+                                  // 注意 _withCtx 返回的是函数, 还不会立即执行(需要在子组件创建/更新时执行)
+                                  // prettier-ignore
+                                  foo: _withCtx(() => [ _createTextVNode(_toDisplayString(_ctx.name), 1 /* TEXT */)]),
+                                  // prettier-ignore
+                                  default: _withCtx(() => _cache[0] || (_cache[0] = [_createTextVNode('default')])),
+                                  // 渲染来自父组件传入的 slots.bar 直接进一步传入到 Foo 组件中
+                                  bar: _withCtx(() => [_renderSlot(_ctx.$slots, 'bar')]),
+                                  // 或者用户手写 render 函数处理转发 slot, 注意此时不会在当前组件中,这里返回的函数, 不会立即执行
+                                  // 而是在 Foo 组件的创建/更新时执行这里的函数, 从而再去执行 $slots.boo() 创建对应的 vnode
+                                  // 作为 Foo 组件的 subTree 的一部分参与 patch
+                                  boo: () => _ctx.$slots.boo && _ctx.$slots.boo() || h('div', 'fallback')
+                                  // forward slot with props and default content
+                                  car: _withCtx(() => [
+                                    _renderSlot(_ctx.$slots, 'car', { prop: 'car' }, () => [
+                                      _cache[1] || (_cache[1] = _createTextVNode('car')),
+                                    ]),
+                                  ]),
+                                  _: 3 /* FORWARDED */,
+                                },
+                                512 /* NEED_PATCH */,
+                              ),
+                              // NOTE: renderSlot 只是编译模板中的辅助函数, 并没有暴露给手写的
+                              // render 函数, 用户自己手写的 render 函数, 需要用户自己处理父组件传入的 slots
+                              // 比如用户自己执行 slots.bar(), slots.default(), ...
+                              // 这里没有 _withCtx 包裹, 立即执行对应的 slot 函数
+                              // 渲染来自父组件传入的 slots:
+                              // { a:fn, b: fn, default: fn, bar: fn, car: fn }
+                              _renderSlot(_ctx.$slots, 'default'),// 返回的是一个 Fragment
+                              _renderSlot(_ctx.$slots, 'a', { prop: 'a' }), // 返回的是一个 Fragment
+                              // runtime-core/src/helpers/renderSlot.ts
+                              _renderSlot(
+                                /* slots */   _ctx.$slots,
+                                /* name */    'b',
+                                /* props */   { prop: 'b' } ,
+                                /* fallback */() => [ _cache[1] || (_cache[1] = _createTextVNode('b'))]
+                              ) {
+                                let slot = slots[name];
+                                // a compiled slot disables block tracking by default to avoid manual
+                                // invocation interfering with template-based block tracking, but in
+                                // `renderSlot` we can be sure that it's template-based so we can force
+                                // enable it.
+                                // 在 _renderSlot 函数中, 因为只能是来自模板编译的执行,所以这里一定是来自模板编译的
+                                // render, 而不是用户手写的 render, 故可以开启优化
+                                if (slot && (slot as ContextualRenderFn)._c) {
+                                  ;(slot as ContextualRenderFn)._d = false
+                                }
+                                openBlock();
+                                // 这里执行 slots.bar(props), slots.bar(props) 函数
+                                // validSlotContent = slot(props) || null
+                                const validSlotContent = slot && ensureValidVNode(slot(props));
+                                const rendered = createBlock(
+                                  Fragment,
+                                  { key: slotKey},/* props */
+                                  validSlotContent || (fallback ? fallback() : []), /* children */
+                                  PatchFlags.BAIL /* patchFlag */
+                                );
+                                if (slot && (slot as ContextualRenderFn)._c) {
+                                  ;(slot as ContextualRenderFn)._d = true
+                                }
+                                // 最终模板编译渲染出来的 <slot /> 就是一个 Fragment
+                                return rendered
+                              },
+
+                              // 用户手写 render 函数处理 <slot name="b" prop="b">b</slot> 插槽
+                              // 最终是调用函数,创建vnode,似乎所有的最后都是创建vnode -> patch(vnode) -> dom
+                              _ctx.$slots.b && _ctx.$slots.b({ prop: 'a' }) || h('div', 'fallback')
+                            ],
+                            64 /* STABLE_FRAGMENT */,
+                          )
+                        )
+                      }
+                    );
+                  } else {
+                    // 函数式组件
+                    const render = Component as FunctionalComponent
+                    result = normalizeVNode(
+                      // 函数式组件里面没有使用 call 注入 this
+                      render.length > 1
+                        ? render(props, { attrs, slots, emit })
+                        : render(props, null as any /* we know it doesn't need it */)
+                    );
+                  }
+                } catch(err) {
+                  // 执行出错,清空运行时收集的有编译优化标识的 vnode
+                  blockStack.length = 0
+                  handleError(err, instance, ErrorCodes.RENDER_FUNCTION)
+                  result = createVNode(Comment)
+                }
+
+                // attr merging
+
+                setCurrentRenderingInstance(prev);
+                return result
+              }
               const prevTree = instance.subTree
-              patch(prevTree, nextTree, container, anchor, instance /* parentComponent */)
+              patch(prevTree, nextTree, container, anchor, instance /* parentComponent */) => {
+                // 更新也是深度优先
+                // onBeforeUpdate -> onBeforeUpdate -> onBeforeUpdate
+                // onUpdated      <- onUpdated      <- onUpdated
+                bu && invokeArrayFns(bu)
+                patch(null, subTree, container, anchor, instance => {
+                  bu && invokeArrayFns(bu)
+                  patch(null, subTree, container, anchor, instance) => {
+                    bu && invokeArrayFns(bu)
+                  }
+                  u && queuePostFlushCb(u)
+                }
+                u && queuePostFlushCb(u)
+              }
               instance.subTree = nextTree
               next.el = nextTree.el
               // updated hook 异步执行
               u && queuePostFlushCb(u)
             }
-          }
+          };
 
           // create reactive effect for rendering
           instance.scope.on(){
@@ -543,7 +1006,8 @@ app.mount(container) {
               this.prevScope = activeEffectScope
               activeEffectScope = this
             }
-          }
+          };
+
           // instance.scope.on() 设置 activeEffectScope = instance.scope
           const effect = (instance.effect = new ReactiveEffect(componentUpdateFn)) {
             // 这里通过 instance.scope.on() 设置了 activeEffectScope, 所以这里可以收集这个组件的 effect
@@ -554,6 +1018,7 @@ app.mount(container) {
             // 后面只要调用 instance.scope.stop(), pause(), resume() 的方法就可以对当前组件的 effect
             // 响应式进行停止,暂停等管理
           }
+
           // instance.scope.off() 重置 activeEffectScope, 关闭当前组件 effect 的收集
           instance.scope.off() {
             this._on--
@@ -567,7 +1032,7 @@ app.mount(container) {
           // instance.update() -> effect.run() -> 会设置 instance.update.RUNNING 标识,
           // 后面在 instance.update() 触发属性更新时, 就会触发 dep.trigger() -> 通过这里的
           // RUNNING 与 !ALLOW_RECURSE 来防止重复加入到 queue 中触发执行重复的更新函数
-          const update = (instance.update = effect.run.bind(effect))
+          const update = (instance.update = effect.run.bind(effect));
 
           const job = (instance.job = effect.runIfDirty.bind(effect)) {
             // 每一次 job 执行时, 都会对当前的 effect 进行脏检查
@@ -607,11 +1072,22 @@ app.mount(container) {
               job.flags! &= ~SchedulerJobFlags.ALLOW_RECURSE
             }
           }
+          // NOTE: 这里设置了组件的 job 可以递归插入到队列中执行
 
           // effect.run() 这里直接调用 run, 而不是 job, 无需脏检查
           // 后面更新时, 每次都是执行 job, 里面在执行 run 之前, 会进行脏检查
+          // instance.update()
           update()
         }
+      };
+
+      // patch 结束前 把自己(el or instance) 注册/设置 到父组件的 refs 中
+      // ref 必须要有 parentComponent 因为 ref 获取的是子树中的引用
+      // set ref
+      if (ref != null && parentComponent) {
+        // !n2 为 false
+        // setRef 还需要在 unmount 中调用, 最后一个参数为 true 表示在 unmount 中调用
+        setRef(ref, n1 && n1.ref, parentSuspense, n2 || n1, !n2)
       }
     }
   }

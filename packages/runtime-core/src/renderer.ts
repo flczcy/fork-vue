@@ -486,7 +486,7 @@ function baseCreateRenderer(
         }
     }
 
-    // patch 结束后 把自己(el or instance) 注册/设置 到父组件的 refs 中
+    // patch 结束前 把自己(el or instance) 注册/设置 到父组件的 refs 中
     // ref 必须要有 parentComponent 因为 ref 获取的是子树中的引用
     // set ref
     if (ref != null && parentComponent) {

@@ -358,7 +358,11 @@ const getPublicInstance = (
   i: ComponentInternalInstance | null,
 ): ComponentPublicInstance | ComponentInternalInstance['exposed'] | null => {
   if (!i) return null
-  if (isStatefulComponent(i)) return getComponentPublicInstance(i)
+  if (isStatefulComponent(i)) {
+    // 状态组件
+    return getComponentPublicInstance(i)
+  }
+  // 否则函数式组件没有实例,这里就是用父组件的实例
   return getPublicInstance(i.parent)
 }
 
@@ -373,8 +377,8 @@ export const publicPropertiesMap: PublicPropertiesMap =
     $attrs: i => (__DEV__ ? shallowReadonly(i.attrs) : i.attrs),
     $slots: i => (__DEV__ ? shallowReadonly(i.slots) : i.slots),
     $refs: i => (__DEV__ ? shallowReadonly(i.refs) : i.refs),
-    $parent: i => getPublicInstance(i.parent),
-    $root: i => getPublicInstance(i.root),
+    $parent: i => getPublicInstance(i.parent), // i.parent.exposed || i.parent.proxy
+    $root: i => getPublicInstance(i.root), // i.root.exposed || i.root.proxy
     $host: i => i.ce,
     $emit: i => i.emit,
     $options: i => (__FEATURE_OPTIONS_API__ ? resolveMergedOptions(i) : i.type),
@@ -416,6 +420,8 @@ export const PublicInstanceProxyHandlers: ProxyHandler<any> = {
       return true
     }
 
+    // accessCache 的创建就是在 setupStatefulComponent()
+    // instance.accessCache = Object.create(null) 创建
     const { ctx, setupState, data, props, accessCache, type, appContext } =
       instance
 
@@ -430,6 +436,16 @@ export const PublicInstanceProxyHandlers: ProxyHandler<any> = {
     // is the multiple hasOwn() calls. It's much faster to do a simple property
     // access on a plain object, so we use an accessCache object (with null
     // prototype) to memoize what access type a key corresponds to.
+    // proxy.xxx 取值顺序:
+    // 1. instance.setupState.xxx ->
+    // 2. instance.data.xxx ->
+    // 3. instance.props.xxx ->
+    // 4. instance.ctx.xxx
+    // 由于是在 `<h1>{{ proxy.xxx }}</h1>` (组件的 render)中, 会被频繁的读取
+    // 每次都会执行判断 hasOwn(target, key), 因为执行这两个 hasOwn 判断很费性能
+    // 所以这里将 hasOwn(target, key) 读取过的缓存结果进行缓存, 下次读取就不再需要再次执行 hasOwn 了
+    // 直接从目标对象读取 -> target(key)
+    // 这里的缓存主要是优化每次读取执行 hasOwn 的问题
     let normalizedProps
     if (key[0] !== '$') {
       const n = accessCache![key]

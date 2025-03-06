@@ -632,6 +632,7 @@ export function createComponentInstance(
 
     provides: parent ? parent.provides : Object.create(appContext.provides),
     ids: parent ? parent.ids : ['', 0, 0],
+    // instance.accessCache = Object.create(null)
     accessCache: null!,
     renderCache: [],
 
@@ -1193,6 +1194,13 @@ export function getComponentPublicInstance(
   instance: ComponentInternalInstance,
 ): ComponentPublicInstance | ComponentInternalInstance['exposed'] | null {
   if (instance.exposed) {
+    // instance.exposed 设置在 createSetupContext 中, 通过 setup 函数参数暴露给用户
+    // setup(props, { expose }) {
+    //   用户在组件 sestup 函数中调用暴露出的 expose({}) 传入对象进去给 instance.exposed 设置值
+    //   expose({}) => {
+    //     instance.exposed = exposed || {}
+    //   }
+    // }
     return (
       instance.exposeProxy ||
       (instance.exposeProxy = new Proxy(proxyRefs(markRaw(instance.exposed)), {

@@ -71,6 +71,7 @@ export function renderSlot(
     ;(slot as ContextualRenderFn)._d = false
   }
   openBlock()
+  // slot(props) 此处执行了 slot 函数, 注意凡是模板编译返回的都是数组 vnode
   const validSlotContent = slot && ensureValidVNode(slot(props))
   const slotKey =
     props.key ||
@@ -102,8 +103,13 @@ export function renderSlot(
 export function ensureValidVNode(
   vnodes: VNodeArrayChildren,
 ): VNodeArrayChildren | null {
+  // some 函数, 只要有一个返回 true, 则返回 true
   return vnodes.some(child => {
     if (!isVNode(child)) return true
+    // 1. child 不是 vnode, 直接返回 true, 不在往下遍历
+    // 2. child 就是 vnode,
+    //    2.1 比较 vnode.type 若全都是注释, 返回 false, 否则返回 true
+    //    2.2 比较 vnode.type 若是 Fragment, 继续递归比较子元素若全都是注释节点则返回 false,否则返回 true
     if (child.type === Comment) return false
     if (
       child.type === Fragment &&
