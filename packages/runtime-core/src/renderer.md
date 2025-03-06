@@ -178,7 +178,7 @@ app.mount(container) {
                     // setupState.xxx 优先级最高
                     if((hasSetupBinding(setupState, key) => {
                       return setupState !== EMPTY_OBJ && !setupState.__isScriptSetup && hasOwn(setupState, key)
-                    }) {
+                    })) {
                       // setupState 在后面的 handleSetupResult() 设置
                       // instance.setupState = proxyRefs(setupResult)
                       accessCache![key] = AccessTypes.SETUP
