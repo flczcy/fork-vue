@@ -36,6 +36,14 @@ function findInsertionIndex(id) {
       (middleJobId === id && middleJob.flags & SchedulerJobFlags.PRE)
     ) {
       // 要查找的 id 在中间值的右边
+      // 要插入的 id > 中间值 id 或者
+      // 要插入的 id = 中间值 id, 同时 中间值有 PRE 标记，则插在 PRE 标记的右边
+      // 这里保证插入的 id 与 PRE 的 id 相等时，总是插在 PRE 右边，保证 PRE 在插入的 id 前面
+      // 其他相等的情况则统一插在中间值的左边
+      // NOTE:
+      // 注意这里是判断中间值的 PRE, 不是判断插入进来的 job 是否有 PRE
+
+      // 要查找的 id 在中间值的右边
       // id = 4, 相等并且是 有 PRE 标识, 则插入在后面
       // [1, 2, 3] - [4, 5, 6]
       //                 insertIndex

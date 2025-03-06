@@ -71,9 +71,9 @@ type CountMap = Map<SchedulerJob, number>
 export function nextTick<T = void, R = void>(
   this: T,
   fn?: (this: T) => R,
-): Promise<R | Awaited<R>> {
+): Promise<Awaited<R>> {
   const p = currentFlushPromise || resolvedPromise
-  // 这里不同的 ts 版本会报错：
+  // 这里 ts 版本 5.8.2 以上的会报错：
   // Type 'Promise<R | Awaited<R>>' is not assignable to type 'Promise<Awaited<R>>'.
   //   Type 'R | Awaited<R>' is not assignable to type 'Awaited<R>'.
   //     Type 'R' is not assignable to type 'Awaited<R>'.
@@ -203,7 +203,11 @@ function findInsertionIndex(id: number) {
 export function queueJob(job: SchedulerJob): void {
   // QUEUED 标识的任务已经被插入到队列中了, 不需要再次插入
   if (!(job.flags! & SchedulerJobFlags.QUEUED)) {
-    const jobId = getId(job) // getId 中处理若是 job.id 不存在, 这里返回 Infinity
+    // -1, [0, Infinity), Infinity
+    // 1. 有 id 返回 [0, Infinity) 即 0 <= id < Infinity
+    // 2. 无 id 有 PRE 标识, 返回 -1
+    // 2. 无 id 无 PRE 标识, 返回 Infinity
+    const jobId = getId(job)
     const lastJob = queue[queue.length - 1]
     if (
       !lastJob ||
@@ -222,7 +226,7 @@ export function queueJob(job: SchedulerJob): void {
     } else {
       // slow path
       // 注意这里的插入是从 flushIndex 开始插入, 前面执行过了的 job, 不再考虑
-      // flushIndex 表示当前正在执行的那个 job 再 queue 中所在的索引
+      // flushIndex 表示当前正在执行的那个 job 在 queue 中所在的索引
       // 不是每次都从头开始查找插入的
       queue.splice(findInsertionIndex(jobId), 0, job)
     }
@@ -238,7 +242,7 @@ function queueFlush() {
     // 第一次一个同步操作, 注册一个异步回调函数函数等待同步操作结束
     // 第二次, 3, 4, 的同步操作通过 currentFlushPromise 进行拦截, 不再注册异步回调函数
     // 等所有的同步操作执行完后, 开始执行异步操作 flushJobs
-    // 这里的 currentFlushPromise 的resolve 要等到 flushJobs 执行完后才 resolve
+    // 这里的 currentFlushPromise 的 resolve 要等到 flushJobs 执行完后才 resolve
     // 也就是 currentFlushPromise.then(fn) 中的 fn 要等到 flushJobs 执行完后才会执行
     currentFlushPromise = resolvedPromise.then(flushJobs)
   }
@@ -246,10 +250,14 @@ function queueFlush() {
 
 export function queuePostFlushCb(cb: SchedulerJobs): void {
   if (!isArray(cb)) {
-    // cb 不是数组
+    // 插入单个 job
     if (activePostFlushCbs && cb.id === -1) {
+      // -1 这里不再检查是否重复插入, 同时插入到 postFlushIndex 后面
       activePostFlushCbs.splice(postFlushIndex + 1, 0, cb)
     } else if (!(cb.flags! & SchedulerJobFlags.QUEUED)) {
+      // 这里通过 flags 标识来判断是否已经在队列中了
+      // 若是有 QUEUED 标识, 说明已经插入到队列中了, 无需再次插入, 以避免重复插入
+      // 若是无 QUEUED 标识, 说明没有插入到队列中, 此时直接通过 push 插入到队列最后面
       pendingPostFlushCbs.push(cb)
       cb.flags! |= SchedulerJobFlags.QUEUED
     }
@@ -257,10 +265,12 @@ export function queuePostFlushCb(cb: SchedulerJobs): void {
     // 如果 cb 是一个数组，它是一个组件生命周期钩子，只能由一个已经在主队列中去重的任务触发，
     // 因此我们可以在这种情况下跳过重复检查以提高性能
     // if cb is an array, it is a component lifecycle hook which can only be
-    // triggered by a job, which is already deduped(去重的) in the main queue, so
+    // triggered by a job (这里的 job 指的是 queue 队列中的 job, 也就是组件的更新函数),
+    // which is already deduped(去重的) in the main queue, so
     // we can skip duplicate check here to improve perf
     // 也就是说调用 queuePostFlushCb 函数执行到这里, 说明 queuePostFlushCb 是由 queue 中的 job 触发的
     // 在 queue 中的 job (组件更新函数) 在处理生命周期钩子时 push 到数组时, 已经去重了, 所以我们可以跳过重复检查
+    // 也就是无需判断数组中的每个 job.QUEUED 标识
     pendingPostFlushCbs.push(...cb)
   }
   queueFlush()
@@ -315,7 +325,7 @@ export function flushPostFlushCbs(seen?: CountMap): void {
     // #1947 already has active queue, nested flushPostFlushCbs call
     if (activePostFlushCbs) {
       // 递归调用直接返回, 避免循环递归,
-      // cb() { flushPostFlushCbs(cb) }
+      // cb() { flushPostFlushCbs() }
       // 进入到这里说明 pendingPostFlushCbs.length > 0, 又有新的 cb 被注册到 pendingPostFlushCbs 中
       // 因为之前进入后, pendingPostFlushCbs.length = 0 已被设置为 0, 若是再次调用 flushPostFlushCbs
       // 进入到这里, 说明 pendingPostFlushCbs 中有被注册值, 若是没有值, 则不会执行到这里
@@ -341,7 +351,10 @@ export function flushPostFlushCbs(seen?: CountMap): void {
       if (cb.flags! & SchedulerJobFlags.ALLOW_RECURSE) {
         cb.flags! &= ~SchedulerJobFlags.QUEUED
       }
-      // 若是没有 DISPOSED 标识, 则执行 cb
+      // 若是没有 DISPOSED 标识, 则执行 cb() {
+      //   // 内部嵌套执行 flushPostFlushCbs() 此时 activePostFlushCbs 还未被置为 null
+      //   flushPostFlushCbs()
+      // }
       if (!(cb.flags! & SchedulerJobFlags.DISPOSED)) cb()
       // 执行完后,去掉 QUEUED 标识
       cb.flags! &= ~SchedulerJobFlags.QUEUED
@@ -351,6 +364,7 @@ export function flushPostFlushCbs(seen?: CountMap): void {
   }
 }
 
+// -1, [0, Infinity), Infinity
 const getId = (job: SchedulerJob): number =>
   // 若是没有 id, 但是是有 PRE，那么读取的 id 为 -1，否则返回 Infinity
   // 这里要注意，有 PRE 标识的 job id 默认值为 -1，而不是 infinite
