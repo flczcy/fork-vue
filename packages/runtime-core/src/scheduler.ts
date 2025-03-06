@@ -68,12 +68,26 @@ let currentFlushPromise: Promise<void> | null = null
 const RECURSION_LIMIT = 100
 type CountMap = Map<SchedulerJob, number>
 
-// 当 nextTick 被作为点调用时, 或者 nextTick.call(instance) 此时的 nextTick 中的 this 则是有值
 export function nextTick<T = void, R = void>(
   this: T,
   fn?: (this: T) => R,
 ): Promise<Awaited<R>> {
   const p = currentFlushPromise || resolvedPromise
+  // 这里不同的 ts 版本会报错：
+  // Type 'Promise<R | Awaited<R>>' is not assignable to type 'Promise<Awaited<R>>'.
+  //   Type 'R | Awaited<R>' is not assignable to type 'Awaited<R>'.
+  //     Type 'R' is not assignable to type 'Awaited<R>'.
+  // type A<R = void> = Promise<R | Awaited<R>>
+  // type B<R = void> = Promise<Awaited<R>>
+  // type C<R = void> = Awaited<R>
+  // let a: A = Promise.resolve() as Promise<any>
+  // let b: B = a
+  // let c: A = b
+  // let d: C = undefined
+  // let e: C<string> = ''
+  // let f: C<Promise<string>> = ''
+  // let g: B<string> = Promise.resolve('') as Promise<string | Awaited<string>>
+
   return fn ? p.then(this ? fn.bind(this) : fn) : p
 }
 
