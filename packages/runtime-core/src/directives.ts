@@ -144,11 +144,50 @@ export function withDirectives<T extends VNode>(
     // const _directive_pin = _resolveDirective('pin')
     // const _directive_foo = _resolveDirective('foo')
     // 可以绑定多个指令
+    // 不是内置的指令, 不会产生额外的 vnode 属性
     // <p v-pin:[arg].mod="val" v-foo.mod></p>
     // [
     //   [_directive_pin, _ctx.val, _ctx.arg, { mod: true }],
     //   [_directive_foo,   void 0,   void 0, { mod: true }],
+    //    name,             value,    arg,    modifiers
     // ]
+
+    // 内置指令 v-model, 除了产生指令外, 还会产生额外的 vnode 属性
+    // <input v-model.mod1.mod2='val'/>
+    // [ [ _vModelText, _ctx.val, void 0, { mod1: true, mod2: true } ] ]
+    // props: { "onUpdate:modelValue": $event => ((_ctx.c) = $event) }
+    // 这里的 _vModelText 来自 import { vModelText } from "vue";
+    // return _withDirectives((_openBlock(), _createElementBlock("input", {
+    //   "onUpdate:modelValue": $event => ((_ctx.val) = $event)
+    // }, null, 8 /* PROPS */, ["onUpdate:modelValue"])), [
+    //   [ _vModelText, _ctx.val, void 0, { mod1: true, mod2: true } ]
+    // ])
+
+    // 内置指令 v-model 在组件上面使用, 还会产生额外的 vnode 属性
+    // <Foo v-model.mod1.mod2='val'/>
+    // return (_openBlock(), _createBlock(_component_Foo, {
+    //   modelValue: _ctx.val,
+    //   "onUpdate:modelValue": $event => ((_ctx.val) = $event),
+    //   modelModifiers: { mod1: true, mod2: true }
+    // }, null, 8 /* PROPS */, ["modelValue", "onUpdate:modelValue"]))
+    // 在 Foo 组件中, 可以执行 this.$emit('update:modelValue', val)
+    // <input
+    //   :value="props.modelValue"
+    //   @input="$emit('update:modelValue', $event.target.value)"
+    // />
+
+    // <F v-model:foo-bar.mod1.mod2='val'/>
+    // return (_openBlock(), _createBlock(_component_F, {
+    //   "foo-bar": _ctx.val,
+    //   "onUpdate:fooBar": $event => ((_ctx.val) = $event),
+    //   "foo-barModifiers": { mod1: true, mod2: true }
+    // }, null, 8 /* PROPS */, ["foo-bar", "onUpdate:fooBar"]))
+    // 在 Foo 组件中, 可以执行 this.$emit('update:modelValue', val)
+    // <input
+    //   :value="props['foo-bar']"
+    //   @input="$emit('update:fooBar', $event.target.value)"
+    // />
+
     let [dir, value, arg, modifiers = EMPTY_OBJ] = directives[i]
     if (dir) {
       if (isFunction(dir)) {

@@ -1297,6 +1297,7 @@ function baseCreateRenderer(
   }
 
   const updateComponent = (n1: VNode, n2: VNode, optimized: boolean) => {
+    // 组件实例复用之前 vnode 的组件实例，无需重复创建
     const instance = (n2.component = n1.component)!
     if (shouldUpdateComponent(n1, n2, optimized)) {
       if (
@@ -1318,9 +1319,16 @@ function baseCreateRenderer(
         // normal update
         instance.next = n2
         // instance.update is the reactive effect.
+        // 因为这里的 instance.update 是一个响应式 effect, 所以这里没有将 update 传入参数 next
+        // 因为 update 函数作为 effect 函数默认是不接受任何参数的, 这里不传入参数是为了保持 effect 函数
+        // 一致性,不要将其耦合到组件之中, 而是将其作为一个独立的函数传入 effect 函数中
+        // 这样做的好处是可以将 effect 函数作为一个独立的函数传入，方便进行测试
         instance.update()
       }
     } else {
+      // 两个组件 vnode 的属性，子节点都不变
+      // 1. 对应的 dom 元素无需变化，新的 vnode.el 继续复用页面中的 dom 元素
+      // 2. 组件实例的 vnode 更新为新创建的 vnode
       // no update needed. just copy over properties
       n2.el = n1.el
       instance.vnode = n2

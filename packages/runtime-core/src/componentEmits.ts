@@ -169,9 +169,12 @@ export function emit(
   }
 
   if (__DEV__) {
+    // emit("fooBar")
     const lowerCaseEvent = event.toLowerCase()
     if (lowerCaseEvent !== event && props[toHandlerKey(lowerCaseEvent)]) {
+      // props["onFoobar"]
       warn(
+        // foobar -> fooBar
         `Event "${lowerCaseEvent}" is emitted in component ` +
           `${formatComponentName(
             instance,
@@ -180,7 +183,7 @@ export function emit(
           `Note that HTML attributes are case-insensitive and you cannot use ` +
           `v-on to listen to camelCase events when using in-DOM templates. ` +
           `You should probably use "${hyphenate(
-            event,
+            event, // foo-bar, fooBar
           )}" instead of "${event}".`,
       )
     }
@@ -188,12 +191,59 @@ export function emit(
 
   let handlerName
   let handler =
+    // emit("fooBar") -> props["onFooBar"]
+    // emit("update:fooBar") -> props["onUpdate:fooBar"]
     props[(handlerName = toHandlerKey(event))] ||
     // also try camelCase event handler (#2249)
+    // emit("foo-bar") -> props["onFooBar"]
     props[(handlerName = toHandlerKey(camelize(event)))]
+
+  // <F v-model='c'/>
+  // return (_openBlock(), _createBlock(_component_F, {
+  //   modelValue: _ctx.c, // 新增一个 modelValue 属性
+  //   "onUpdate:modelValue": $event => ((_ctx.c) = $event)
+  // }, null, 8 /* PROPS */, ["modelValue", "onUpdate:modelValue"]))
+
+  // <F v-model:foo.mod='c'/>
+  // return (_openBlock(), _createBlock(_component_F, {
+  //   foo: _ctx.c, // 新增一个 foo 属性
+  //   "onUpdate:foo": $event => ((_ctx.c) = $event),
+  //   fooModifiers: { mod: true } // 新增一个 fooModifiers 属性
+  // }, null, 8 /* PROPS */, ["foo", "onUpdate:foo"]))
+
+  // <F v-model:foo-bar.mod='c'/>
+  // return (_openBlock(), _createBlock(_component_F, {
+  //   "foo-bar": _ctx.c,
+  //   "onUpdate:fooBar": $event => ((_ctx.c) = $event),
+  //   "foo-barModifiers": { mod: true }
+  // }, null, 8 /* PROPS */, ["foo-bar", "onUpdate:fooBar"]))
+
+  // <F v-model:foo-bar.mod1.mod2='val'/>
+  // return (_openBlock(), _createBlock(_component_F, {
+  //   "foo-bar": _ctx.val,
+  //   "onUpdate:fooBar": $event => ((_ctx.val) = $event),
+  //   "foo-barModifiers": { mod1: true, mod2: true }
+  // }, null, 8 /* PROPS */, ["foo-bar", "onUpdate:fooBar"]))
+  // 在 Foo 组件中, 可以执行 this.$emit('update:modelValue', val)
+  // <input
+  //   :value="props['foo-bar']"
+  //   @input="$emit('update:fooBar', $event.target.value)"
+  // />
+
   // for v-model update:xxx events, also trigger kebab-case equivalent
   // for props passed via kebab-case
   if (!handler && isModelListener) {
+    // 手动传入属性
+    // h(Foo, {
+    //   'foo-bar': _ctx.val, // 用于接收的初始值
+    //   'onUpdate:foo-bar': $event => (_ctx.val = $event),
+    // })
+    // 在 Foo 组件中
+    // <input
+    //   :value="props['foo-bar']" // 接收来自组件的属性 'foo-bar' 的初始值
+    //   @input="$emit('update:fooBar', $event.target.value)" // 通知组件更新 'foo-bar' 属性的值
+    // />
+    // 此时需要 'update:fooBar' -> 'onUpdate:foo-bar'  才可以在属性中找到对应的事件函数
     handler = props[(handlerName = toHandlerKey(hyphenate(event)))]
   }
 
@@ -289,6 +339,18 @@ export function isEmitListener(
   options: ObjectEmitsOptions | null,
   key: string,
 ): boolean {
+  // {
+  //   name: "Foo",
+  //   emits: {
+  //     click: null,
+  //     "foo-bar": null,
+  //   },
+  // }
+  // <Foo @foo-bar="fn" /> or <Foo @fooBar="fn" /> 都可以, 内部都是使用驼峰式的事件名查找
+  // props: { onFooBar: fn }
+  // emit("foo-bar", args) -> 查找事件名 -> 转成驼峰 -> 查找事件名
+
+  // emits: { click: null, "foo-bar": null, foo: null }
   if (!options || !isOn(key)) {
     return false
   }
@@ -297,10 +359,16 @@ export function isEmitListener(
     return true
   }
 
+  // v-on:foo.once="fn" -> { onFooOnce: fn }
+  // v-on:foo-bar.once="fn" -> { onFooBarOnce: fn }
   key = key.slice(2).replace(/Once$/, '')
+  // onFooBarOnce -> FooBar
   return (
+    // FooBar -> fooBar
     hasOwn(options, key[0].toLowerCase() + key.slice(1)) ||
+    // FooBar -> foo-bar
     hasOwn(options, hyphenate(key)) ||
+    // FooBar
     hasOwn(options, key)
   )
 }

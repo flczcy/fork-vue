@@ -324,6 +324,8 @@ export let currentBlock: VNode['dynamicChildren'] = null
 //     : _createCommentVNode("v-if", true) ], 64 /* STABLE_FRAGMENT */))
 
 export function openBlock(disableTracking = false): void {
+  // 每次执行 openBlock(), 则将 currentBlock 设置新的值 []
+  // 每次执行 openBlock(false), 则将 currentBlock 设置新的值 null
   blockStack.push((currentBlock = disableTracking ? null : []))
 }
 
@@ -372,7 +374,7 @@ function setupBlock(vnode: VNode) {
   vnode.dynamicChildren =
     isBlockTreeEnabled > 0 ? currentBlock || (EMPTY_ARR as any) : null
   // close block
-  closeBlock()
+  closeBlock() // 执行完后, currentBlock 被设置为父层的 block
   // a block is always going to be patched, so track it as a child of its
   // parent block
   if (isBlockTreeEnabled > 0 && currentBlock) {
@@ -399,7 +401,7 @@ export function createElementBlock(
       children,
       patchFlag,
       dynamicProps,
-      shapeFlag,
+      shapeFlag /* 有默认值, 可不传; type === Fragment ? 0 : ShapeFlags.ELEMENT */,
       true /* isBlock */,
       // false, /* needFullChildrenNormalization */ 这里不传, 有默认值 false
     ),
@@ -610,6 +612,8 @@ function createBaseVNode(
     warn(`VNode created with invalid key (NaN). VNode type:`, vnode.type)
   }
 
+  // 这里与 vue-router 收集路由将树状结构的路由扁平化的逻辑类似, 路由是收集到 matches 数组中
+  // 这里是收集到 currentBlock 数组中, 都是进行扁平化收集
   // track vnode for block tree
   if (
     isBlockTreeEnabled > 0 &&
@@ -625,6 +629,7 @@ function createBaseVNode(
     // the EVENTS flag is only for hydration and if it is the only flag, the
     // vnode should not be considered dynamic due to handler caching.
     vnode.patchFlag !== PatchFlags.NEED_HYDRATION
+    // 注意这里不是包含的关系, vnode.patchFlag 表示只有一种标识 PatchFlags.NEED_HYDRATION
   ) {
     currentBlock.push(vnode)
   }
