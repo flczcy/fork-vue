@@ -677,7 +677,10 @@ function baseCreateRenderer(
       )
     }
 
+    // vnode.dirs 元素的指令
     if (dirs) {
+      // created 指令 hook 执行时, 只是元素的子元素都创建好了, 但是属性还没有处理
+      // 同时元素 el 还没有插入到父容器(还未插队到 dom 中)
       invokeDirectiveHook(vnode, null, parentComponent, 'created')
     }
     // scopeId
@@ -720,23 +723,34 @@ function baseCreateRenderer(
     }
 
     if (dirs) {
+      // 执行元素指令 hooks
+      // beforeMount: 元素 el 还没有插入到父容器(还未插队到 dom 中)
       invokeDirectiveHook(vnode, null, parentComponent, 'beforeMount')
     }
     // #1583 For inside suspense + suspense not resolved case, enter hook should call when suspense resolved
     // #1689 For inside suspense + suspense resolved case, just call it
     const needCallTransitionHooks = needTransition(parentSuspense, transition)
     if (needCallTransitionHooks) {
+      // 元素未插入前 transition 是依赖 dom 元素的
       transition!.beforeEnter(el)
     }
+    // before
     hostInsert(el, container, anchor)
+    // mounted
     if (
       (vnodeHook = props && props.onVnodeMounted) ||
       needCallTransitionHooks ||
       dirs
     ) {
+      // 有指令 dirs
+      // queuePostFlushCb
       queuePostRenderEffect(() => {
+        // 这里一次执行多个钩子函数(都是在组件的主队列(更新函数)后面执行)
+        // onVnodeMounted
         vnodeHook && invokeVNodeHook(vnodeHook, parentComponent, vnode)
+        // transition!.enter(e)
         needCallTransitionHooks && transition!.enter(el)
+        // 执行指令的 mounted 函数, 此时元素已经插入到父容器中了,
         dirs && invokeDirectiveHook(vnode, null, parentComponent, 'mounted')
       }, parentSuspense)
     }
@@ -847,6 +861,7 @@ function baseCreateRenderer(
       invokeVNodeHook(vnodeHook, parentComponent, n2, n1)
     }
     if (dirs) {
+      // 元素指令 beforeUpdate
       invokeDirectiveHook(n2, n1, parentComponent, 'beforeUpdate')
     }
     parentComponent && toggleRecurse(parentComponent, true)
@@ -955,6 +970,7 @@ function baseCreateRenderer(
     if ((vnodeHook = newProps.onVnodeUpdated) || dirs) {
       queuePostRenderEffect(() => {
         vnodeHook && invokeVNodeHook(vnodeHook, parentComponent, n2, n1)
+        // 元素指令 updated
         dirs && invokeDirectiveHook(n2, n1, parentComponent, 'updated')
       }, parentSuspense)
     }

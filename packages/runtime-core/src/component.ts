@@ -1068,6 +1068,14 @@ export function finishComponentSetup(
     const reset = setCurrentInstance(instance)
     pauseTracking()
     try {
+      // 选项式 API 其实就是内部将其放在 setup 函数后面执行选项定义的函数,比如 watch()
+      // 就是将选项中的 options.watch() 放在 setup 函数内执行, 这个与直接从
+      // import { watch } from 'vue'
+      // setup() {
+      //   watch() // 组合式 api
+      //   options.watch() // 将选项中定义的 watch 提取出来也放在 setup 函数执行
+      //   // 所以本质上, 选项式 API 其实内部就是基于组合式 API 实现的
+      // }
       applyOptions(instance)
     } finally {
       resetTracking()

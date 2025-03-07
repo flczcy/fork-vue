@@ -243,10 +243,9 @@ export function renderComponentRoot(
           `The directives will not function as intended.`,
       )
     }
-    // 注意种类的 vnode 是组件的都 vnode,
+    // 注意这里的 vnode 是组件的 vnode,
     // 每次组件创建新的 subTree 需要将组件的指令设置到 subTree 中
-    // 这里之所以克隆,是因为某些 vnode 可能是被静态提升的, 所以需要克隆, 以免直接修改
-    // 会将静态节点也给修改了
+    // 这里之所以克隆,是因为某些 vnode 可能是被静态提升的, 所以需要克隆, 以免直接修改会将静态节点也给修改了
     // render() => cache[3] || cache[3] = createVNode('div', {....})
     // 所以并不是每次调用 render 函数创建返回的 vnode 就是新的 vnode, 有可能是静态提升缓存的 vnode
     // 并不是新的 vnode, 而是之前的缓存的 vnode, 所以这里需要克隆一个新的 vnode, 以避免直接缓存的

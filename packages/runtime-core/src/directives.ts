@@ -141,9 +141,18 @@ export function withDirectives<T extends VNode>(
   const instance = getComponentPublicInstance(currentRenderingInstance)
   const bindings: DirectiveBinding[] = vnode.dirs || (vnode.dirs = [])
   for (let i = 0; i < directives.length; i++) {
+    // const _directive_pin = _resolveDirective('pin')
+    // const _directive_foo = _resolveDirective('foo')
+    // 可以绑定多个指令
+    // <p v-pin:[arg].mod="val" v-foo.mod></p>
+    // [
+    //   [_directive_pin, _ctx.val, _ctx.arg, { mod: true }],
+    //   [_directive_foo,   void 0,   void 0, { mod: true }],
+    // ]
     let [dir, value, arg, modifiers = EMPTY_OBJ] = directives[i]
     if (dir) {
       if (isFunction(dir)) {
+        // 将函数式组件转为对象指令的写法
         dir = {
           mounted: dir,
           updated: dir,
@@ -152,6 +161,8 @@ export function withDirectives<T extends VNode>(
       if (dir.deep) {
         traverse(value)
       }
+      // 将指令放入到 vnode.dirs 中 同 instance 绑定
+      // 这是在创建 组件的 subTree 中执行的
       bindings.push({
         dir,
         instance,
@@ -178,6 +189,15 @@ export function invokeDirectiveHook(
     if (oldBindings) {
       binding.oldValue = oldBindings[i].value
     }
+    // 这里传入的 name 在组件不同的生命周期钩子函数中, 可以是 mounted, updated, ... 等不同的值
+    // dir: {
+    //   mounted(el, binding, vnode, prevVNode) {
+    //     const { dir, instance, value, oldValue, arg, modifiers } = binding
+    //   },
+    //   updated(el, binding, vnode, prevVNode) {
+    //     const { dir, instance, value, oldValue, arg, modifiers } = binding
+    //   },
+    // }
     let hook = binding.dir[name] as DirectiveHook | DirectiveHook[] | undefined
     if (__COMPAT__ && !hook) {
       hook = mapCompatDirectiveHook(name, binding.dir, instance)

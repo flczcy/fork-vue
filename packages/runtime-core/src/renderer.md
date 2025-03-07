@@ -272,6 +272,7 @@ app.mount(container, isHydrate) {
             instance.props = shallowReactive(props)
             instance.attrs = excludePropsOptions(props)
           }
+          // instance.slots = {}
           initSlots(instance, children, optimized) {
             const slots = createInternalObject()
             instance.slots = slots
@@ -811,6 +812,11 @@ app.mount(container, isHydrate) {
                   // 给当前组件显式
                   // clone before mutating since the root may be a hoisted vnode
                   root = cloneVNode(root, null, false, true)
+                  // 来自组件的指令要放到组件中的 subTree 中元素节点中去, 组件的指令只有当组件的 subTree 是单个
+                  // 元素节点时,才会有效, 组件的 subTree 若是多个节点, 那么设置在组件上面的是无效的
+                  // 指令主要是针对 dom 元素的, 注意这里的 vnode 是组件的 vnode, 不是这里的 subTree 的 vnode
+                  // root 才是这里的组件的 subTree, 这里是要将组件 vnode.dirs 指令放入到 subTree 的 dirs 中
+                  // 因为组件的指令最终要应用到 元素 vnode 中
                   root.dirs = root.dirs ? root.dirs.concat(vnode.dirs) : vnode.dirs
                 }
                 // inherit transition data
@@ -823,7 +829,6 @@ app.mount(container, isHydrate) {
                   }
                   setTransitionHooks(root, vnode.transition)
                 }
-
 
                 result = root
 
