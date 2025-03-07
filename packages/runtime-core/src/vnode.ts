@@ -510,9 +510,9 @@ const normalizeKey = ({ key }: VNodeProps): VNode['key'] =>
 //   }), 256 /* UNKEYED_FRAGMENT */))
 // ])
 const normalizeRef = ({
-  ref,
-  ref_key,
-  ref_for,
+  ref, // string,ref,function,array
+  ref_key, // 在编译阶段生成的唯一标识符
+  ref_for, // 是在编译到 v-for 是由编译器添加的
 }: VNodeProps): VNodeNormalizedRefAtom | null => {
   if (typeof ref === 'number') {
     ref = '' + ref
@@ -556,13 +556,13 @@ function createBaseVNode(
     scopeId: currentScopeId,
     slotScopeIds: null,
     children,
-    component: null,
+    component: null, // patch 时创建组件后赋值
     suspense: null,
     ssContent: null,
     ssFallback: null,
     dirs: null,
     transition: null,
-    el: null,
+    el: null, // patch() 时创建元素后赋值
     anchor: null,
     target: null,
     targetStart: null,
@@ -575,11 +575,20 @@ function createBaseVNode(
     appContext: null,
     // 只有组件才有 subTree, 调用组件的 render 函数时设置 currentRenderingInstance 为
     // 创建 vnode 时, 对应的组件
-    // const prev = setCurrentRenderingInstance(i)
-    // subtTree = instance.render() // 在创建 组件的 subTree(vnode) 时, 组件实例
     // 这里的 vnode.ctx 在组件的 调用 instance.render() 函数时进行设置
+    // const prev = setCurrentRenderingInstance(i)
+    // 在创建组件的 subTree(vnode) 时, 组件实例
+    // subtTree = instance.render() {
+    //   return createVNode('div', props, children) {
+    //     const vnode = {
+    //       ctx: currentRenderingInstance, // 此时这里的 currentRenderingInstance 已经被设置
+    //       // 即 createBaseVNode 是在组件的创建/更新中执行的(因为组件要创建 subTree)
+    //     }
+    //     return vnode
+    //   }
+    // }
     // setCurrentRenderingInstance(prev)
-    ctx: currentRenderingInstance,
+    ctx: currentRenderingInstance, // patch 时创建组件后赋值(这里为创建的 App 组件实例)
   } as VNode
 
   if (needFullChildrenNormalization) {

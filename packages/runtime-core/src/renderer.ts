@@ -494,7 +494,6 @@ function baseCreateRenderer(
       // setRef 还需要在 unmount 中调用, 最后一个参数为 true 表示在 unmount 中调用
       setRef(ref, n1 && n1.ref, parentSuspense, n2 || n1, !n2)
     }
-    // patch 执行完后,下面则是执行组件的 onMounted hooks
   }
 
   const processText: ProcessTextOrCommentFn = (n1, n2, container, anchor) => {

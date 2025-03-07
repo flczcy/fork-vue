@@ -1,11 +1,150 @@
 ```js
-app = createApp(App, props)
+export let currentApp: App<unknown> | null = null
+app = createApp(App, rootProps) {
+  const renderer = function createRenderer(rendererOptions){
+    const patch = (n1, n2, container, parent) {
+    }
+    const render = (vnode, container) => {
+      patch(n1, n2, container, anchor, parent)
+    }
+    return {
+      render,
+      createApp: function createAppAPI(render, hydrate){
+        let uid = 0
+        return function createApp(rootComponent, rootProps = null) {...}
+      }
+    }
+  }
+  return renderer.createApp(App, rootProps) {
+    const rootComponent = App
+    const context = function createAppContext(){
+      return {
+        app: null, // app = context.app = {}
+        config: {
+          isNativeTag: NO,
+          performance: false,
+          globalProperties: {},
+          optionMergeStrategies: {},
+          errorHandler: undefined,
+          warnHandler: undefined,
+          compilerOptions: {},
+        },
+        mixins: [],
+        components: {},
+        directives: {},
+        provides: Object.create(null),
+        optionsCache: new WeakMap(),
+        propsCache: new WeakMap(),
+        emitsCache: new WeakMap(),
+      }
+    }
+    const installedPlugins = new WeakSet()
+    let isMounted = false
+    // context.app 在这里赋值为一个新对象
+    const app = context.app = {
+      _uid: uid++,
+      _props: rootProps,
+      _component: rootComponent,
+      _context: context,
+      _instance: null,
+      version: __VERSION__,
+      get config() { return context.config },
+      use(plugin: Plugin, ...options: any[]) {
+        if (installedPlugins.has(plugin)) {
+          __DEV__ && warn(`Plugin has already been applied to target app.`)
+        } else if (plugin && isFunction(plugin.install)) {
+          installedPlugins.add(plugin)
+          plugin.install(app, ...options)
+        } else if (isFunction(plugin)) {
+          installedPlugins.add(plugin)
+          plugin(app, ...options)
+        } else if (__DEV__) {
+          warn(
+            `A plugin must either be a function or an object with an "install" ` +
+              `function.`,
+          )
+        }
+        return app
+      },
+      // context.provides
+      provide(key, value) {
+        context.provides[key] = value
+        return app
+      },
+      // context.components
+      component(name: string, component?: Component) {
+        if (!component) {
+          return context.components[name]
+        }
+        if (__DEV__ && context.components[name]) {
+          warn(`Component "${name}" has already been registered in target app.`)
+        }
+        context.components[name] = component
+        return app
+      },
+      // context.directives
+      directive(name: string, directive?: Directive) {
+        if (!directive) {
+          return context.directives[name] as any
+        }
+        if (__DEV__ && context.directives[name]) {
+          warn(`Directive "${name}" has already been registered in target app.`)
+        }
+        context.directives[name] = directive
+        return app
+      },
+      // 只有调用过 runWithContext(fn) 才有给 currentApp 设置值,
+      // 执行完 fn() 后, 将 currentApp 重置
+      // Used to identify the current app when using `inject()` within
+      runWithContext(fn) {
+        const lastApp = currentApp
+        currentApp = app
+        try {
+          // 保证 fn() 的执行上下文中有 currentApp
+          return fn()
+        } finally {
+          currentApp = lastApp
+        }
+      },
+      // render(rootVNode, rootProps)
+      mount(rootContainer, isHydrate, namespace) {
+        if (!isMounted) {
+          // app.mount(rootContainer)
+        } else if (__DEV__) {
+          warn(
+            `App has already been mounted.\n` +
+              `If you want to remount the same app, move your app creation logic ` +
+              `into a factory function and create fresh app instances for each ` +
+              `mount - e.g. \`const createMyApp = () => createApp(App)\``,
+          )
+        }
+      }
+    }
+  }
+}
 
-app.mount(container) {
-  // 这是 root vnode, 但是这里没有传入 children, 也即传入的组件 App 中, 在作为根组件时,
-  // 传入不了 slots,
+app.mount(container, isHydrate) {
+  // 这是 root vnode, 但是这里没有传入 children,
+  // 也即传入的组件 App 中, 在作为根组件时, 传入不了 slots,
+  // 所有的 vnode 都是组件 subTrre 的一部分
+  // 所有的 vnode 都是在 patch 中进行的, 最终转换为组件或者元素的
+  // createVNode(type, props, children)
+  //   -> patch(vnode) -> createComponent(vnode) -> createElement(vnode)
+  // createVNode(type, props, children)
+  //   -> patch(vnode) -> createElement(vnode)
   const vnode = createVNode(rootComponent, rootProps) {
-    const vnode = {}
+    const type = rootComponent
+    const vnode = {
+      type: type,
+      props: rootProps,
+      children: null,
+      patchFlag = 0,
+      shapeFlag: type === Fragment ? 0 : ShapeFlags.ELEMENT,
+      el: null, // patch() 时创建元素后赋值
+      component: null, // patch 时创建组件后赋值
+      ctx: currentRenderingInstance, // patch 时创建组件后赋值(这里为创建的 App 组件实例)
+      appContext: null, // application root node only 只有 root vnode 才有这个 appContext
+    }
     normalizeChildren(vnode, children){
       let type = 0
       const { shapeFlag } = vnode
@@ -17,11 +156,20 @@ app.mount(container) {
       vnode.shapeFlag |= type
     }
     // 由于 root vnode 创建时, 没有传入 children 所以 root vnode 不涉及到 slots 的处理
-    return vnode.children
+    // 因为 root vnode 没有 parent vnode, 所以无法传入 slots, 因为 slots 只能是父组件传入给子组件
+    // 而 root vnode 压根就没有 parent vnode
+    return vnode
   };
+
+  // createComponentInstance() 设置
+  // store app context on the root VNode.
+  // this will be set on the root instance on initial mount.
+  vnode.appContext = context
+
   // 以上的 vnode 是在 root component 创建前创建的 所以在创建 root vnode 时,
   // currentRenderingInstance 没有被设置
   // 渲染 root vnode
+  // isHydrate && hydrate &&  hydrate(vnode, container)
   render(vnode, container) {
     patch(container._vnode || null, vnode, container, anchor = null, parentComponent = null) {
       const { type, ref, shapeFlag } = vnode
@@ -45,6 +193,8 @@ app.mount(container) {
       };
 
       mountComponent(vnode, container, anchor, parent) {
+        // inherit parent app context - or - if root, adopt from root vnode
+        const appContext = (parent ? parent.appContext : vnode.appContext) || emptyAppContext
         const instance = createComponentInstance(initialVNode, parentComponent, parentSuspense) {
           const instance = {
             uid: uid++,
@@ -53,8 +203,9 @@ app.mount(container) {
             type, vnode.type,
             subTree: null,
             parent: parent,
+            appContext: appContext, // 最终继承子 rootVnode.appContext
             // state
-            ctx: EMPTY_OBJ,
+            ctx: EMPTY_OBJ, // 下面立即设置 { _: instance }
             data: EMPTY_OBJ,
             props: EMPTY_OBJ,
             attrs: EMPTY_OBJ,
@@ -75,7 +226,11 @@ app.mount(container) {
             exposeProxy: null,
             withProxy: null,
 
+            // inheritAttrs
+            inheritAttrs: vnode.type.inheritAttrs,
+
             ids: parent ? parent.ids : ['', 0, 0],
+            // 最终继承自 appContext.provides
             provides: parent ? parent.provides : Object.create(appContext.provides),
             accessCache: null!,
             renderCache: [],
@@ -471,6 +626,7 @@ app.mount(container) {
                 const prev = setCurrentRenderingInstance(instance);
                 const { render, props, setupState, renderCache, data, ctx, proxy } = instance;
                 const { inheritAttrs, slots, attrs, emit, vnode, type } = instance;
+                const { propsOptions: [propsOptions] } = instance
                 try {
                   if (vnode.shapeFlag & ShapeFlags.STATEFUL_COMPONENT) {
                     // 状态组件
@@ -487,6 +643,8 @@ app.mount(container) {
                         }
                       }
                     );
+                    // 默认 fallthroughAttrs 为 attrs
+                    fallthroughAttrs = attrs
                   } else {
                     // 函数式组件
                     const render = Component as FunctionalComponent
@@ -503,8 +661,171 @@ app.mount(container) {
                   handleError(err, instance, ErrorCodes.RENDER_FUNCTION)
                   result = createVNode(Comment)
                 }
-
+                // 注意这里的 result 是 subTree, 可能是单个根节点, 或者多个节点
+                let root = result
+                const isModelListener = (key) => key.startsWith('onUpdate:')
                 // attr merging
+                // 创建完组件的 subTree 后,
+                // 若是还多出一些属性, 那么就需要 对 subTree 设置一些额外的属性, 并不是直接返回
+                // 这里修改/设置新的属性会影响 vnode.ref, vnode.props 里面新增的属性可能不是经过 normalized 的
+                // 故还要进行某些属性的 normalized, 所以这里使用 cloneNode 的方式会更快一些
+                if (fallthroughAttrs && inheritAttrs !== false) {
+                  // inheritAttrs 默认为 undefined 故若是没有显式的设置 false,
+                  // 那么默认 inheritAttrs 为 undefined 即 inheritAttrs 执行属性 fallthroughAttrs
+                  // 到子节点, 这里若是无必要, 最好显式的设置 inheritAttrs 为 false, 可以提升一点性能
+                  const keys = Object.keys(fallthroughAttrs)
+                  const { shapeFlag } = root
+                  // 如 fallthroughAttrs 有属性
+                  if (keys.length) {
+                    // subTree 为单个节点(组件vnode 或者元素vnode)
+                    if (shapeFlag & (ShapeFlags.ELEMENT | ShapeFlags.COMPONENT)) {
+                      if (propsOptions && keys.some(isModelListener)) {
+                        // If a v-model listener (onUpdate:xxx) has a corresponding declared
+                        // prop, it indicates this component expects to handle v-model and
+                        // it should not fallthrough.
+                        // related: #1543, #1643, #1989
+                        fallthroughAttrs = filterModelListeners(
+                          fallthroughAttrs,
+                          propsOptions,
+                        )
+                      };
+                      // 这里是 cloneVNode 的使用场景之一:
+                      // 将来自组件 vnode 的一些属性 (instance.attrs) 设置到组件的子节点 vnode 上
+                      // 给组件的子节点 root 设置一些来自组件中的属性
+                      root = cloneVNode(root, fallthroughAttrs, false, true) {
+                        const vnode = root
+                        const extraProps = fallthroughAttrs
+                        const mergeRef = false
+                        const cloneTransition = true
+                        // This is intentionally NOT using spread or extend to avoid the runtime
+                        // key enumeration cost.
+                        const { props, ref, patchFlag, children, transition } = vnode
+                        const mergedProps = extraProps ? mergeProps(props || {}, extraProps) : props
+                        const cloned = {
+                          __v_isVNode: true,
+                          __v_skip: true,
+                          type: vnode.type,
+                          props: mergedProps,
+                          key: mergedProps && normalizeKey(mergedProps),
+                          ref:
+                            // { i: currentRenderingInstance, r: ref, k: ref_key, f: !!ref_for }
+                            // extraProps 是来自父组件 vnode 中属性, 若是有 ref
+                            extraProps && extraProps.ref
+                              ? // #2078 in the case of <component :is="vnode" ref="extra"/>
+                                // if the vnode itself already has a ref, cloneVNode will need to merge
+                                // the refs so the single vnode can be set on multiple refs
+                                mergeRef && ref
+                                ? isArray(ref)
+                                  ? ref.concat(normalizeRef(extraProps)!)
+                                  : [ref, normalizeRef(extraProps)!]
+                                : normalizeRef(extraProps)
+                              : ref,
+                          children: children,
+                          shapeFlag: vnode.shapeFlag,
+                          // if the vnode is cloned with extra props, we can no longer assume its
+                          // existing patch flag to be reliable and need to add the FULL_PROPS flag.
+                          // note: preserve flag for fragments since they use the flag for children
+                          // fast paths only.
+                          patchFlag:
+                            extraProps && vnode.type !== Fragment
+                              ? patchFlag === PatchFlags.CACHED // hoisted node
+                                ? PatchFlags.FULL_PROPS
+                                : patchFlag | PatchFlags.FULL_PROPS
+                              : patchFlag,
+                          dynamicProps: vnode.dynamicProps,
+                          dynamicChildren: vnode.dynamicChildren,
+                          appContext: vnode.appContext,
+                          dirs: vnode.dirs,
+                          transition,
+
+                          // These should technically only be non-null on mounted VNodes. However,
+                          // they *should* be copied for kept-alive vnodes. So we just always copy
+                          // them since them being non-null during a mount doesn't affect the logic as
+                          // they will simply be overwritten.
+                          component: vnode.component,
+                          suspense: vnode.suspense,
+                          ssContent: vnode.ssContent && cloneVNode(vnode.ssContent),
+                          ssFallback: vnode.ssFallback && cloneVNode(vnode.ssFallback),
+                          el: vnode.el,
+                          anchor: vnode.anchor,
+                          ctx: vnode.ctx,
+                          ce: vnode.ce,
+                        }
+                        // if the vnode will be replaced by the cloned one, it is necessary
+                        // to clone the transition to ensure that the vnode referenced within
+                        // the transition hooks is fresh.
+                        if (transition && cloneTransition) {
+                          setTransitionHooks(
+                            cloned as VNode,
+                            transition.clone(cloned as VNode) as TransitionHooks,
+                          )
+                        }
+                        return cloned
+                      };
+                    } else if (__DEV__ && !accessedAttrs && root.type !== Comment) {
+                      // 组件 subTree 不是单个节点不进行 fallthroughAttrs
+                      const allAttrs = Object.keys(attrs)
+                      const eventAttrs: string[] = []
+                      const extraAttrs: string[] = []
+                      extraAttrs.length && warn(
+                        `Extraneous non-props attributes (` +
+                          `${extraAttrs.join(', ')}) ` +
+                          `were passed to component but could not be automatically inherited ` +
+                          `because component renders fragment or text or teleport root nodes.`,
+                      )
+                      eventAttrs.length && warn(
+                        `Extraneous non-emits event listeners (` +
+                          `${eventAttrs.join(', ')}) ` +
+                          `were passed to component but could not be automatically inherited ` +
+                          `because component renders fragment or text root nodes. ` +
+                          `If the listener is intended to be a component custom event listener only, ` +
+                          `declare it using the "emits" option.`,
+                      )
+                    }
+                  }
+                }
+
+                const isElementRoot = (vnode: VNode) => {
+                  return (
+                    vnode.shapeFlag & (ShapeFlags.COMPONENT | ShapeFlags.ELEMENT) ||
+                    vnode.type === Comment // potential v-if branch switch
+                  )
+                }
+                // inherit directives
+                if (vnode.dirs) {
+                  if (__DEV__ && !isElementRoot(root)) {
+                    warn(
+                      `Runtime directive used on component with non-element root node. ` +
+                        `The directives will not function as intended.`,
+                    )
+                  }
+                  // 注意种类的 vnode 是组件的都 vnode,
+                  // 每次组件创建新的 subTree 需要将组件的指令设置到 subTree 中
+                  // 这里之所以克隆,是因为某些 vnode 可能是被静态提升的, 所以需要克隆, 以免直接修改
+                  // 会将静态节点也给修改了
+                  // render() => cache[3] || cache[3] = createVNode('div', {....})
+                  // 所以并不是每次调用 render 函数创建返回的 vnode 就是新的 vnode, 有可能是静态提升缓存的 vnode
+                  // 并不是新的 vnode, 而是之前的缓存的 vnode, 所以这里需要克隆一个新的 vnode, 以避免直接缓存的
+                  // vnode, 因为这里缓存的 vnode 可能还在其他的组件中展示, 而当前的组件需要一个新的 vnode,
+                  // 其他的组件依然需要之前缓存的 vnode, 故当前组件不能修改缓存的组件,只能克隆一个新的vnode
+                  // 给当前组件显式
+                  // clone before mutating since the root may be a hoisted vnode
+                  root = cloneVNode(root, null, false, true)
+                  root.dirs = root.dirs ? root.dirs.concat(vnode.dirs) : vnode.dirs
+                }
+                // inherit transition data
+                if (vnode.transition) {
+                  if (__DEV__ && !isElementRoot(root)) {
+                    warn(
+                      `Component inside <Transition> renders non-element root node ` +
+                        `that cannot be animated.`,
+                    )
+                  }
+                  setTransitionHooks(root, vnode.transition)
+                }
+
+
+                result = root
 
                 setCurrentRenderingInstance(prev);
                 return result
@@ -1091,5 +1412,9 @@ app.mount(container) {
       }
     }
   }
+
+  isMounted = true
+  app._container = rootContainer
+  return getComponentPublicInstance(vnode.component!)
 }
 ```

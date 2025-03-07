@@ -642,7 +642,7 @@ export function createComponentInstance(
 
     // resolved props and emits options
     // 这里是定义在组件选项中的 props 注意和传入的 vnode.props 的区分
-    // 用户传入的 props 有多中形式, 统一成对象的形式
+    // 用户传入的 props 有多种形式, 统一成对象的形式
     // ['foo', 'bar']  => {foo: { type: String, required: false, default: undefined, ...   }}
     // { foo: String } => {foo: { type: String, required: false, default: undefined, ...   }}
     // [{ foo: String }, {bar: Number, default: 0}] => { foo: {}, bar: { type: Number, default: 0 }}

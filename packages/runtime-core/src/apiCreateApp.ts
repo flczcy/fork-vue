@@ -377,9 +377,11 @@ export function createAppAPI<HostElement>(
           //   }
           // }
           const vnode = app._ceVNode || createVNode(rootComponent, rootProps)
+
           // store app context on the root VNode.
           // this will be set on the root instance on initial mount.
           vnode.appContext = context
+          // 在 createComponentInstance() 设置 vnode.appContext 到 component.appContext
 
           if (namespace === true) {
             namespace = 'svg'
