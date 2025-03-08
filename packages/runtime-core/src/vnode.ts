@@ -386,8 +386,10 @@ function setupBlock(vnode: VNode) {
 /**
  * @private
  */
-export function createElementBlock(
-  type: string | typeof Fragment,
+// createVNode, createBlock, h: needFullChildrenNormalization 总是 true
+// createBaseVNode,createElementBlock,createElementVNode: needFullChildrenNormalization 默认为 false
+export function createElementBlock /* needFullChildrenNormalization: false */(
+  type: string | typeof Fragment, // 专门针对 元素/Fragment vnode block
   props?: Record<string, any> | null,
   children?: any,
   patchFlag?: number,
@@ -402,7 +404,11 @@ export function createElementBlock(
       patchFlag,
       dynamicProps,
       shapeFlag /* 有默认值, 可不传; type === Fragment ? 0 : ShapeFlags.ELEMENT */,
-      true /* isBlock */,
+      true /* isBlock: prevent a block from tracking itself */,
+      /*
+       * isBlock: 主要是标识当前的 vnode 自身为 block, 在 createBaseVNode 中不要将自己收集到 block 中,
+       * 因为当前的 vnode 是给父层的 currentBlock 收集的, 自己就不要再收集自己到自己所在层级 currentBlock 中
+       */
       // false, /* needFullChildrenNormalization */ 这里不传, 有默认值 false
     ),
   )
@@ -423,8 +429,10 @@ export function createElementBlock(
  *
  * @private
  */
-export function createBlock(
-  type: VNodeTypes | ClassComponent,
+// createVNode, createBlock, h: needFullChildrenNormalization 总是 true
+// createBaseVNode,createElementBlock,createElementVNode: needFullChildrenNormalization 默认为 false
+export function createBlock /* needFullChildrenNormalization: true */(
+  type: VNodeTypes | ClassComponent, // 专门针对 除了元素/fragment 的 vnode 类型
   props?: Record<string, any> | null,
   children?: any,
   patchFlag?: number,
@@ -438,7 +446,14 @@ export function createBlock(
       patchFlag,
       dynamicProps,
       true /* isBlock: prevent a block from tracking itself */,
+      // true /* needFullChildrenNormalization: createVNode 内部传给 createBaseVNode 显式的传 true */,
     ),
+    // 与 createBaseVNode 区别就是:
+    // createVNode 函数内部会分析各种传入的 type 确定 shapeFlag
+    // createBaseVNode 内部自己不会确定 shapeFlag, 需要外部传入 shapeFlag, 不传默认就是 ShapeFlags.ELEMENT
+    // 所以在模板编译的 render 函数在 ast 分析中对元素vnode会提前知道,因为是字符,
+    // 所以就确定 shapeFlag 为 ShapeFlags.ELEMENT, 此时直接调用 createBaseVNode 即可,
+    // 其模板中的 createElementVNode 就是 createBaseVNode 的别名
   )
 }
 
@@ -534,6 +549,8 @@ const normalizeRef = ({
 }
 
 // 别名: createElementVNode, 专门用在 vue 模板的编译中
+// createVNode, createBlock, h: needFullChildrenNormalization 总是 true
+// createBaseVNode,createElementBlock,createElementVNode: needFullChildrenNormalization 默认为 false
 function createBaseVNode(
   type: VNodeTypes | ClassComponent | typeof NULL_DYNAMIC_COMPONENT,
   props: (Data & VNodeProps) | null = null,
@@ -593,13 +610,19 @@ function createBaseVNode(
     ctx: currentRenderingInstance, // patch 时创建组件后赋值(这里为创建的 App 组件实例)
   } as VNode
 
+  // createVNode, createBlock, h: needFullChildrenNormalization 总是 true
+  // createBaseVNode,createElementBlock,createElementVNode: needFullChildrenNormalization 默认 false
   if (needFullChildrenNormalization) {
+    // 来自 h 函数, 或者来自模板编译的 createVNode, createBlock
     normalizeChildren(vnode, children)
     // normalize suspense children
     if (__FEATURE_SUSPENSE__ && shapeFlag & ShapeFlags.SUSPENSE) {
       ;(type as typeof SuspenseImpl).normalize(vnode)
     }
   } else if (children) {
+    // 来自模板编译(compiled) 中的 createElementBlock(), createElementVNode:
+    // 其 children 的类型只能是 string or Array
+    // needFullChildrenNormalization 为 false
     // compiled element vnode - if children is passed, only possible types are
     // string or Array.
     vnode.shapeFlag |= isString(children)
@@ -976,18 +999,31 @@ export function normalizeChildren(vnode: VNode, children: unknown): void {
   if (children == null) {
     children = null
   } else if (isArray(children)) {
+    // 组件,元素,Fragment 等 vnode 的 children 都可以是数组
     // [h(Foo, null, {}), h(div, 'hi', []), h(Text, 1)]
     // 若是数组, 也会先执行数组里面的 h 函数, 返回具体的 vnode
     // 所以数组里面的元素已经先执行了 normalizeChildren(vnode), 通过每个元素执行的 h 函数
     // 数组同时说明每个数组元素已经执行过了 normalizeChildren
     type = ShapeFlags.ARRAY_CHILDREN
   } else if (typeof children === 'object') {
+    // 这里是针对元素 vnode, 其 children 也被传成了对象,
     if (shapeFlag & (ShapeFlags.ELEMENT | ShapeFlags.TELEPORT)) {
       // 元素 vnode, children 传入的为对象
+      // 正常创建 div 元素 vnode, 那么其 children 应为数组, 但是若是传入了对象,
+      // 那么就只认可其对象中的 default 对应的 vnode, 为传入元素的 children
+      // 此时取出对象中的 default() 对应的 children, 将这个 children 作为 vnode 的 children 进行
+      // normalizeChildren(vnode, default()){
+      //   const children = default()
+      //   vnode.children = children
+      //   vnode.shapeFlag |= typeof children
+      // }
+      // 因为只有组件的 children 是可以传入对象的, 当然组件 vnode 的 children 也是可以传入数组的,
+      // 那么对于组件 vnode, 其 children 为数组, 则默认放入对象的 default 中
       // h(div, null, {
       //   header: () => h('p', 'hader'),
       //   footer: () => h('p', 'footer'),
-      //   default: () => h('p', 'default')
+      //   default: () => h('p', 'default'),
+      //   default: withCtx(() => h('p', 'default')), 经过 withCtx 包装的都会有 _c 标识
       // })
       // Normalize slot to plain children for plain element and Teleport
       const slot = (children as any).default
@@ -995,11 +1031,17 @@ export function normalizeChildren(vnode: VNode, children: unknown): void {
         // _c marker is added by withCtx() indicating this is a compiled slot
         // _d disable block tracking 标志用于指示是否需要禁用块跟踪(block tracking)
         slot._c && (slot._d = false) // enabled block tracking
+        // withCtx 在模板编译中,h 函数中都会调用的
+        // 如果是 slot._c 存在, 表示是经过 withCtx 编译过来的, 那么可以进行 block tracking
         normalizeChildren(vnode, slot())
+        // 若不是 slot._c, 即表示 h 函数过来的那么, 不设置 slot._d = false
+        // 即 h 函数过来的不会设置 slot._d = false, 所以 h 函数中是禁止 block tracking
         slot._c && (slot._d = true) // disable block tracking
+        // 如果是 slot._c 存在, 表示为 withCtx 编译过来的, 那么此时执行完后禁止 block tracking
       }
       return
     } else {
+      // 否则 shapeFlag 为组件 vnode
       // 传入的是对象表示插槽
       // h(Com, null, {
       //   header: () => h('p', 'hader'),

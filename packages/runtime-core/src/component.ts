@@ -646,6 +646,48 @@ export function createComponentInstance(
     // ['foo', 'bar']  => {foo: { type: String, required: false, default: undefined, ...   }}
     // { foo: String } => {foo: { type: String, required: false, default: undefined, ...   }}
     // [{ foo: String }, {bar: Number, default: 0}] => { foo: {}, bar: { type: Number, default: 0 }}
+    // h(
+    //   {
+    //     // 这里是写在组件里面, 在创建 vnode 时, 不会涉及这里
+    //     // 只有在创建组件时, 才会设置这里面的 propsOptions
+    //     // 组件的属性声明: propsOptions 多种写法 -> normalizePropsOptions
+    //     props: {
+    //       id: Number,
+    //       ref: String, // 组件保留属性
+    //       name: { type: String, required: true, default: ''}
+    //       show: { type: Boolean, default: true },
+    //       data: { type: Array, default: []}
+    //       "foo-bar": String,
+    //       modalVale: undefined
+    //     },
+    //     props: ['id','name', 'show', 'data', "foo-bar"],
+    //     props: ['modalVale', { name: { type: String, required: true, default: ''} }],
+
+    //     // 组件的事件声明: emitsOptions 多种写法 -> normalizePropsOptions
+    //     emits: ['up', 'foo-bar', 'update:modalValue', 'update:foo-bar', 'update:fooBar'],
+    //     emits: {
+    //       up: null,
+    //       'foo-bar': () => {},
+    //       'update:modalValue': null,
+    //       'update:foo-bar': null,
+    //       'update:fooBar': null
+    //     }
+    //   },
+    //   {
+    //     // 传入给 vnode 的 vnode.props: rawProps, 可以包含(组件事件,组件属性,其他属性)
+    //     id: 1, // 是否存在组件的 propsOptions 存在放入 instance.props, 不存在放入 instance.attrs
+    //     key: 1, // 同时作为 vnode 的 key 不存在放入 instance.attrs, 存在放入 instance.props
+    //     ref: 'i', // 同时作为 vnode 的 ref, 不存在放入 instance.attrs, 存在放入 instance.props
+    //     foo: 'foo', // propsOptions, 不存在放入 instance.attrs, 存在放入 instance.props
+    //     onUp: () => {},  // 传入事件 hooks 是否存在组件的 emits 中
+    //     onVnodeMounted: fn, // 传入 vnode hooks
+    //     // 是否存在组件的 emitsOptions 中, 不存在作为普通元素 attrs 设置到元素上面若是单个元素节点的话
+    //     onClick: fn, // 是否存在组件的 propsOptions, 不存在放入 instance.attrs
+    //     onclick: fn, // 是否存在组件的 propsOptions, 不存在放入 instance.attrs
+    //     name: 'admin',  // 是否存在组件的 propsOptions, 存在放入 instance.props
+    //     data: [1, 2, 3] // 是否存在组件的 propsOptions, 存在放入 instance.props
+    //   }
+    // )
     propsOptions: normalizePropsOptions(type, appContext),
     // ['a', 'b'] => { a: null, b: null}
     // { a: () => {}, b: null }

@@ -213,3 +213,79 @@ mountElement(vnode, container,anchor, parentComponent){
   }
 }
 ```
+
+## vue 内置指令 v-model
+
+```html
+<!-- 一个元素上面放置 多个 指令 -->
+<input v-model="c" v-pin />
+<!-- v-model 指令应用在组件上面, 而不是元素上面, 只是属性的展开 -->
+<Foooo v-model="f" v-pin />
+<!-- 等价于 -->
+<!-- prettier-ignore -->
+<Foooo :modelValue="f" :onUpdate:modelValue="$event => f = $event" v-pin />
+
+<Foooo v-model:foo="f" v-pin />
+<!-- 等价于 -->
+<!-- prettier-ignore -->
+<Foooo :foo="f" :onUpdate:foo="$event => f = $event" v-pin />
+```
+
+```js
+import {
+  vModelText as _vModelText,
+  resolveDirective as _resolveDirective,
+  createElementVNode as _createElementVNode,
+  withDirectives as _withDirectives,
+  resolveComponent as _resolveComponent,
+  createVNode as _createVNode,
+  Fragment as _Fragment,
+  openBlock as _openBlock,
+  createElementBlock as _createElementBlock,
+} from 'vue'
+
+const _hoisted_1 = ['onUpdate:modelValue']
+
+export function render(_ctx, _cache, $props, $setup, $data, $options) {
+  const _directive_pin = _resolveDirective('pin')
+
+  // _vModelText 在这里是一个 vue 的内置指令
+  // _directive_pin 则是用户定义的指令
+
+  // v-model 指令应用在组件上面, 而不是元素上面, 只是属性的展开
+
+  // prettier-ignore
+  return (_openBlock(), _createElementBlock(_Fragment, null, [
+    _withDirectives(_createElementVNode("input", {
+      "onUpdate:modelValue": $event => ((_ctx.c) = $event)
+    }, null, 8 /* PROPS */, _hoisted_1), [
+      [_vModelText, _ctx.c],
+      [_directive_pin]
+    ]),
+    _withDirectives(_createVNode(_component_Foooo, {
+      modelValue: _ctx.f,
+      "onUpdate:modelValue": $event => ((_ctx.f) = $event)
+    }, null, 8 /* PROPS */, ["modelValue", "onUpdate:modelValue"]), [
+      [_directive_pin]
+    ]),
+    _withDirectives(_createVNode(_component_Foooo, {
+      modelValue: _ctx.f,
+      "onUpdate:modelValue": $event => _ctx.f = $event
+    }, null, 8 /* PROPS */, ["modelValue", "onUpdate:modelValue"]), [
+      [_directive_pin]
+    ]),
+    _withDirectives(_createVNode(_component_Foooo, {
+      foo: _ctx.f,
+      "onUpdate:foo": $event => ((_ctx.f) = $event)
+    }, null, 8 /* PROPS */, ["foo", "onUpdate:foo"]), [
+      [_directive_pin]
+    ]),
+    _withDirectives(_createVNode(_component_Foooo, {
+      foo: _ctx.f,
+      "onUpdate:foo": $event => _ctx.f = $event
+    }, null, 8 /* PROPS */, ["foo", "onUpdate:foo"]), [
+      [_directive_pin]
+    ])
+  ], 64 /* STABLE_FRAGMENT */))
+}
+```

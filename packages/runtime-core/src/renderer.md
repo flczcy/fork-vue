@@ -238,14 +238,289 @@ app.mount(container, isHydrate) {
             // resolved props and emits options
             // 这里是定义在组件选项中的 props 注意和传入的 vnode.props 的区分
             // 用户传入的 props 有多中形式, 统一成对象的形式
-            // ['foo', 'bar']  => {foo: { type: String, required: false, default: undefined, ...   }}
-            // { foo: String } => {foo: { type: String, required: false, default: undefined, ...   }}
-            // [{ foo: String }, {bar: Number, default: 0}] => { foo: {}, bar: { type: Number, default: 0 }}
-            propsOptions: normalizePropsOptions(type, appContext),
-            // ['a', 'b'] => { a: null, b: null}
-            // { a: () => {}, b: null }
+            _h: h(
+              {
+                // 这里是写在组件里面, 在创建 vnode 时, 不会涉及这里
+                // 只有在创建组件时, 才会设置这里面的 propsOptions
+                // 组件的属性声明: propsOptions 多种写法 -> normalizePropsOptions
+                props: {
+                  id: Number,  // -> { type: Number }
+                  ref: String, // 无效属性, 组件保留属性(key,ref_for, ref_key,...)
+                  $bar: String, // 无效属性, 组件保留属性 ($ 开头的都是组件保留的属性)
+                  onVnodeMounted: fn, // 无效属性, 组件保留属性
+                  // 也是无效属性, 组件保留属性, 因为内部会统一 camelize 到 onVnodeMounted
+                  "on-vnode-mounted": fn,
+                  name: { type: String, required: true, default: ''}
+                  show: { type: Boolean, default: true },
+                  data: { type: Array, default: []}
+                  "foo-bar": [String, Boolean], // 可以是多个类型
+                  modalVale: undefined
+                },
+                props: ['id','name', 'show', 'data', "foo-bar"],
+                // 下面的数组声明方式,是无效, vue 规定使用数组声明的属性, 元素必须全都是字符串
+                props: ['modalVale', { name: { type: String, required: true, default: ''} }],
+
+                // 组件的事件声明: emitsOptions 多种写法 -> normalizePropsOptions
+                emits: ['up', 'foo-bar', 'update:modalValue', 'update:foo-bar', 'update:fooBar'],
+                emits: {
+                  up: null,
+                  'foo-bar': () => {},
+                  'update:modalValue': null,
+                  'update:foo-bar': null,
+                  'update:fooBar': null
+                }
+              },
+              {
+                // 传入给 vnode 的 vnode.props: rawProps, 可以包含(组件事件,组件属性,其他属性)
+                id: 1, // 是否存在组件的 propsOptions 存在放入 instance.props, 不存在放入 instance.attrs
+                key: 1, // 同时作为 vnode 的 key 不存在放入 instance.attrs, 存在放入 instance.props
+                ref: 'i', // 同时作为 vnode 的 ref, 不存在放入 instance.attrs, 存在放入 instance.props
+                foo: 'foo', // propsOptions, 不存在放入 instance.attrs, 存在放入 instance.props
+                onUp: () => {},  // 传入事件 hooks 是否存在组件的 emits 中
+                onVnodeMounted: fn, // 传入 vnode hooks
+                // 是否存在组件的 emitsOptions 中, 不存在作为普通元素 attrs 设置到元素上面若是单个元素节点的话
+                onClick: fn, // 是否存在组件的 propsOptions, 不存在放入 instance.attrs
+                onclick: fn, // 是否存在组件的 propsOptions, 不存在放入 instance.attrs
+                name: 'admin',  // 是否存在组件的 propsOptions, 存在放入 instance.props
+                data: [1, 2, 3] // 是否存在组件的 propsOptions, 存在放入 instance.props
+              }
+            ),
+            // props:
+            _rawProps: {
+              id: [String, Number, Boolean],
+              bo: [Boolean, Number, String],
+              data: Array,
+              'foo-bar': { type: String, default: "foo" }
+            },
+            // =>
+            // propsOptions[normalized, needCastKeys]:
+            _propsOptions: [
+              // normalized:
+              {
+                id: {
+                   // 多个类型中, Boolean 在 String 前面
+                    type: [Boolean, Number, String],
+                    [BooleanFlags.shouldCast]: true,
+                    [BooleanFlags.shouldCastTrue]: true // Boolean 在 String 前面
+                },
+                bo: {
+                   // 多个类型中, String 在 Boolean 前面
+                    type: [String, Number, Boolean],
+                    [BooleanFlags.shouldCast]: true,
+                    [BooleanFlags.shouldCastTrue]: false // Boolean 在 String 后面
+                },
+                data: {
+                    type: Array,
+                    [BooleanFlags.shouldCast]: false,
+                    [BooleanFlags.shouldCastTrue]: true
+                },
+                // key 全部都变成 camelCase
+                fooBar: {
+                    type: String,
+                    default: "foo",
+                    [BooleanFlags.shouldCast]: false,
+                    [BooleanFlags.shouldCastTrue]: true
+                }
+              },
+              // needCastKeys:
+              ["id", "bo", "fooBar"] // 最后一个属性放置的是: 有 Boolean 类型的属性, 或者有默认值的属性
+            ],
+            propsOptions: normalizePropsOptions(type, appContext) => {
+              const comp = type
+              const cache = appContext.propsCache
+              const cached = cache.get(comp)
+              if (cached) {
+                // 将组件声明的 props 进行 normalizePropsOptions 后, 就进行了缓存, 避免了
+                // 每次创建同一个组件的不同实例, 都要进行一次 normalization 操作, 这里同一个组件的 propOptions
+                // 只进行一次 normalization 操作, 后面相同的组件实例时,只从缓存中取, 避免重复的 normalization
+                return cached
+              }
+              const raw = comp.props
+              const normalized: NormalizedPropsOptions[0] = {}
+              // 用于 boolean 值的转换
+              const needCastKeys: NormalizedPropsOptions[1] = []
+
+              let hasExtends = false
+              if (!raw && !hasExtends) {
+                // 没有组件属性声明, 则返回一个默认空数组
+                //  NOTE:  normalizePropsOptions 返回的是一个数组
+                if (isObject(comp)) {
+                  cache.set(comp, EMPTY_ARR as any)
+                }
+                return EMPTY_ARR as any
+              }
+              // 组件声明的数组方式:
+              // ["id", "foo-bar", "show"]
+              // =>
+              // { id: {}, fooBar: {}, show: {} }
+              // 这种数组方式没有指定类型, 则没有 BooleanFlags 属性
+              // NOTE: 使用数组声明, 里面元素必须都是字符串
+              if (isArray(raw)) {
+                for (let i = 0; i < raw.length; i++) {
+                  if (__DEV__ && !isString(raw[i])) {
+                    warn(`props must be strings when using array syntax.`, raw[i])
+                  }
+                  // 属性名统一为 驼峰命名
+                  // props: ['id', 'foo-bar'] -> { id: {}, fooBar: {} }
+                  // 这里的 key 也需要 normalization 就是统一格式为 camelCase
+                  const normalizedKey = camelize(raw[i])
+                  if (validatePropName(normalizedKey)) {
+                    // 声明的属性名称不可以是 key[0] !== '$' 第一个字符是以 $ 开头
+                    // 声明的属性名不可以是下面的保留字符 - 注意这里的空字符 '' 也是 vue 的保留的内部属性名
+                    // // the leading comma is intentional so empty string "" is also included
+                    // ',key,ref,ref_for,ref_key,' +
+                    // 'onVnodeBeforeMount,onVnodeMounted,' +
+                    // 'onVnodeBeforeUpdate,onVnodeUpdated,' +
+                    // 'onVnodeBeforeUnmount,onVnodeUnmounted',
+                    normalized[normalizedKey] = EMPTY_OBJ
+                    // { id: {}, fooBar: {} }
+                  }
+                }
+              } else if (raw) {
+                if (__DEV__ && !isObject(raw)) {
+                  warn(`invalid props options`, raw)
+                }
+                // 注意在 for in 中 这里的 raw 即使是 undefined/null 都不会报错
+                // for (const key in '') {}
+                // for (const key in null) {}
+                // for (const key in undefined) {} 都不会报错
+                for (const key in raw) {
+                  // 首先是 key 的 normalization, 转为驼峰命名
+                  const normalizedKey = camelize(key)
+                  // 不是一下的有效属性名, 直接返回
+                  if (!validatePropName(normalizedKey)) return
+                  // 声明的属性名称不可以是 key[0] !== '$' 第一个字符是以 $ 开头
+                  // 声明的属性名不可以是下面的保留字符 - 注意这里的空字符 '' 也是 vue 的保留的内部属性名
+                  // // the leading comma is intentional so empty string "" is also included
+                  // ',key,ref,ref_for,ref_key,' +
+                  // 'onVnodeBeforeMount,onVnodeMounted,' +
+                  // 'onVnodeBeforeUpdate,onVnodeUpdated,' +
+                  // 'onVnodeBeforeUnmount,onVnodeUnmounted',
+                  // props: { id: [String, Number], data: Array,  'foo-bar': { type: String } }
+                  //              isArray                 isFunction         otherwise
+                  const opt = raw[key]
+                  // 每个属性可以是 数组, 类型函数(String,Boolean,Number,Array, ...), 对象
+                  const props = isArray(opt) || isFunction(opt) ? { type: opt } : extend({}, opt))
+                  // 最终转为对象形式: { id: { type: [String, Number] }, data: { type: Array }}
+                  normalized[normalizedKey] = props
+                  const propType = prop.type
+                  let shouldCast = false // 应该类型转换
+                  let shouldCastTrue = true // 类型转换到 true
+                  if (isArray(propType)) {
+                    // 属性类型有多种, 若是其中有 Boolean, 则应设置 shouldCast 为 true
+                    // { id: [String, Number] }, propType = [String, Number]
+                    for (let index = 0; index < propType.length; ++index) {
+                      const type = propType[index]
+                      const typeName = isFunction(type) && type.name
+                      if (typeName === 'Boolean') {
+                        // 只要先碰到 bool 类型 表示需要进行类型转换
+                        shouldCast = true
+                        break // 直接终止遍历
+                      } else if (typeName === 'String') {
+                        // If we find `String` before `Boolean`, e.g. `[String, Boolean]`,
+                        // we need to handle the casting slightly differently. Props
+                        // passed as `<Comp checked="">` or `<Comp checked="checked">`
+                        // will either be treated as strings or converted to a boolean
+                        // `true`, depending on the order of the types.
+                        // 表示在多个类型中, String 在 Boolean 前面
+                        shouldCastTrue = false
+                      }
+                    }
+                  } else {
+                    // 类型只有一种 并且类型是 Boolean, 那么 shouldCast 为 true
+                    shouldCast = isFunction(propType) && propType.name === 'Boolean'
+                  }
+
+                  // Boolean: shouldCast = true, shouldCastTrue = true
+                  // [Boolean, String]: shouldCast = true, shouldCastTrue = true
+                  // [String, Boolean]: shouldCast = true, shouldCastTrue = false
+                  // [String, !Boolean]: shouldCast = false, shouldCastTrue = false
+                  // other: shouldCast = false, shouldCastTrue = true
+                  // 为属性设置标识
+                  prop[BooleanFlags.shouldCast] = shouldCast // 为 true, 属性有 Boolean 类型
+                  prop[BooleanFlags.shouldCastTrue] = shouldCastTrue
+                  // 为 true ->  [Boolean, String]
+                  // 为 false -> [String,  Boolean]
+                  // if the prop needs boolean casting or default value
+                  if (shouldCast || hasOwn(prop, 'default')) {
+                    // 表示有默认值的属性或者是有类型有 Boolean 属性
+                    needCastKeys.push(normalizedKey)
+                  }
+                }
+              };
+              {
+                // {
+                //   id: [String, Number, Boolean],
+                //   bo: [Boolean, Number, String],
+                //   data: Array,
+                //   'foo-bar': { type: String, default: "foo" }
+                // }
+                // =>
+                // [
+                //   {
+                //     id: {
+                //        // 多个类型中, Boolean 在 String 前面
+                //        type: [Boolean, Number, String],
+                //        [BooleanFlags.shouldCast]: true,
+                //        [BooleanFlags.shouldCastTrue]: true // Boolean 在 String 前面
+                //     },
+                //     bo: {
+                //        // 多个类型中, String 在 Boolean 前面
+                //        type: [String, Number, Boolean],
+                //        [BooleanFlags.shouldCast]: true,
+                //        [BooleanFlags.shouldCastTrue]: false // Boolean 在 String 后面
+                //     },
+                //     data: {
+                //        type: Array,
+                //        [BooleanFlags.shouldCast]: false,
+                //        [BooleanFlags.shouldCastTrue]: true
+                //     },
+                //     // key 全部都变成 camelCase
+                //     fooBar: {
+                //        type: String,
+                //        default: "foo",
+                //        [BooleanFlags.shouldCast]: false,
+                //        [BooleanFlags.shouldCastTrue]: true
+                //     }
+                //   },
+                //   ["id", "bo", "fooBar"] // 最后一个属性放置的是: 有 Boolean 类型的属性, 或者有默认值的属性
+                // ]
+              };
+              const res: NormalizedPropsOptions = [normalized, needCastKeys]
+              if (isObject(comp)) {
+                cache.set(comp, res)
+              }
+              return res
+            },
             // 定义组件暴露的事件函数, 当执行 emit('name') 需要满足时 emits 中定义的事件名称
-            emitsOptions: normalizeEmitsOptions(type, appContext),
+            emitsOptions: normalizeEmitsOptions(type, appContext) => {
+              const comp = type
+              const cache = appContext.emitsCache
+              const cached = cache.get(comp)
+              if (cached !== undefined) {
+                return cached
+              }
+              // emits: ['up', 'foo-bar', 'update:modalValue', 'update:foo-bar', 'update:fooBar']
+              // =>
+              // emits: {
+              //   up: null,
+              //   'foo-bar': () => {},
+              //   'update:modalValue': null,
+              //   'update:foo-bar': null,
+              //   'update:fooBar': null
+              // }
+              const raw = comp.emits
+              let normalized: ObjectEmitsOptions = {}
+              if (isArray(raw)) {
+                raw.forEach(key => (normalized[key] = null))
+              } else {
+                extend(normalized, raw)
+              }
+              if (isObject(comp)) {
+                cache.set(comp, normalized)
+              }
+              return normalized
+            },
           }
           if (__DEV__) {
             instance.ctx = createDevRenderContext(instance)
@@ -267,22 +542,371 @@ app.mount(container, isHydrate) {
         // resolve props and slots for setup context
         setupComponent(instance, false, optimized) => {
           const isStateful = isStatefulComponent(instance) => {};
-          initProps(instance, props, isStateful, isSSR) {
-            // 初始化时, 将传入的 props 进行响应式处理
+          const { props, children } = instance.vnode;
+          // props 属性的读取都是统一转成 camelCase, 而 attrs 中则没有转换
+          initProps(instance, instance.vnode.props, isStateful, isSSR) {
+            // rawProps -> instance.props 表示创建 vnode 时传入的 Props
+            // h(Foo, rawProps, children), 这里的 rawProps 内部可以传入任意的属性,
+            // 需要将 rawProps 进行抽取 若是满足 propsOptions 中需要放入 props, 否在放入 attrs
+            // h({ props: ['a', 'd']},           {a: 0, b: 1, c: 2})
+            //     | 组件声明的属性(propsOptions)   传入的 vnode.props -> rawProps
+            // rawProps(propsOptions) ->
+            //  props: { a: 0 },
+            //  attrs: { b: 1, c: 2 }
+            const rawProps = instance.vnode.props // 传入 vnode 中的 props
+            const props: Data = {}
+            const attrs: Data = createInternalObject()
+
+            instance.propsDefaults = Object.create(null)
+
+            setFullProps(instance, rawProps, props, attrs) {
+              // rawProps: { id: 0,  data: [], "foo-bar": '1', 'bar-foo': '2', onUp: fn }
+              // instance.propsOptions 在函数总 createComponentInstance() 中设置
+              // {
+              //   id: [String, Number, Boolean],
+              //   bo: [Boolean, Number, String],
+              //   data: Array,
+              //   'foo-bar': { type: String, default: "foo" }
+              // }
+              // =>
+              // [
+              //   {
+              //     id: {
+              //        // 多个类型中, Boolean 在 String 前面
+              //        type: [Boolean, Number, String],
+              //        [BooleanFlags.shouldCast]: true,
+              //        [BooleanFlags.shouldCastTrue]: true // Boolean 在 String 前面
+              //     },
+              //     bo: {
+              //        // 多个类型中, String 在 Boolean 前面
+              //        type: [String, Number, Boolean],
+              //        [BooleanFlags.shouldCast]: true,
+              //        [BooleanFlags.shouldCastTrue]: false // Boolean 在 String 后面
+              //     },
+              //     data: {
+              //        type: Array,
+              //        [BooleanFlags.shouldCast]: false,
+              //        [BooleanFlags.shouldCastTrue]: true
+              //     },
+              //     // key 全部都变成 camelCase
+              //     fooBar: {
+              //        type: String,
+              //        default: "foo",
+              //        [BooleanFlags.shouldCast]: false,
+              //        [BooleanFlags.shouldCastTrue]: true
+              //     }
+              //   },
+              //   ["id", "bo", "fooBar"] // 最后一个属性放置的是: 有 Boolean 类型的属性, 或者有默认值的属性
+              // ]
+              const rawProps = instance.vnode.props
+              const [options, needCastKeys] = instance.propsOptions
+              let hasAttrsChanged = false
+              let rawCastValues: Data | undefined
+
+              if (!rawProps) return false
+
+              for (let key in rawProps) {
+                // key, ref are reserved and never passed down
+                if (isReservedProp(key)) {
+                  continue
+                }
+                // key: 'foo-bar'
+                const value = rawProps[key]
+                // 用户传入的 key 可以是任意格式, 这里统一将其设置为 camelCase
+                // prop option names are camelized during normalization, so to support
+                // kebab -> camel conversion here we need to camelize the key.
+                let camelKey = camelize(key) // foo-bar -> fooBar
+                if (options && hasOwn(options, (camelKey = camelize(key)))) {
+                  // 用户传入的属性 key 属于组件声明的属性,那么设置到 props 中, 注意是以 camelCase 设置的
+                  if (!needCastKeys || !needCastKeys.includes(camelKey)) {
+                    // rawProps: { id: 0,  data: [], "foo-bar": '1', 'bar-foo': '2', onUp: fn }
+                    // 这里的 camelKey 是在遍历 rawProps 传入的 key, 但是这里在 options 中定义的 key `bo`
+                    // 没有传入进来
+                    // needCastKeys = ["id", "bo", "fooBar"]
+                    // options: { id, data, bo, fooBar}
+                    props[camelKey] = value
+                    // props = { data: [] }
+                  } else {
+                    // needCastKeys 表示属性有多个类型(包含Boolean 类型) 或者默认值
+                    // rawCastValues = { id: 0, fooBar: '1' }
+                    // 这里因为 rawProps 没有传入 'bo' 这个属性,
+                    // 此时这里的 rawCastValues 则不会包含 `bo` 属性, 所以此时的 属性 'bo' 即使 `absent`
+                    ;(rawCastValues || (rawCastValues = {}))[camelKey] = value
+                  }
+                } else if (!isEmitListener(instance.emitsOptions, key)) {
+                  // 执行到这里说明 key 不在组件声明的属性中, 那么余下来的 key 就还可能是 emitsOptions 的 key
+                  // 比如用户传入了 onFooBar 的属性 key, 若是去除了 on 的属性 fooBar 存在于 emitsOptions 中,
+                  // 那么就表示此 key 是属于 emitsOptions 的事件 key, 此时不应放入 attrs 中
+                  // Any non-declared (either as a prop or an emitted event) props are put
+                  // into a separate `attrs` object for spreading. Make sure to preserve
+                  // original key casing
+                  // 任何非声明的属性: 既不是属性也不是发射的事件放入 attrs 中, 其 key 不进行 camelCase 转换
+                  // attrs 中 key 没有转 camelCase, 保持原来的 key 形式
+                  if (!(key in attrs) || value !== attrs[key]) {
+                    // 这里赋值时, 有比较值是否变化, 若是变化, 这里设置 hasAttrsChanged 为 true
+                    attrs[key] = value
+                    // attrs = { 'bar-foo': "2" }
+                    hasAttrsChanged = true
+                  }
+                }
+              }
+              // needCastKeys 存在, rawCastValues 中的值要进行类型转换赋值到 props 中
+              // needCastKeys = ["id", "bo", "fooBar"]
+              // rawCastValues = { id: 0, fooBar: '1' }
+              // 处理属性默认值
+              if (needCastKeys) {
+                // needCastKeys 包含有默认值的属性与需要类型转换的属性(含有 boolean)
+                const rawCurrentProps = toRaw(props)
+                const castValues = rawCastValues || EMPTY_OBJ
+                for (let i = 0; i < needCastKeys.length; i++) {
+                  const key = needCastKeys[i] // id, bo, fooBar
+                  props[key] = resolvePropValue(
+                    options!,
+                    rawCurrentProps,
+                    key,
+                    castValues[key],
+                    instance,
+                    /* 什么场景会出现 isAbsent ?
+                    * 当传入的 rawProps: { id: 0,  data: [], "foo-bar": '1', 'bar-foo': '2' }
+                    * 并没有包括组件声明的中属性时, 比如这里的 'bo'
+                    * 而 needCastKeys = ["id", "bo", "fooBar"] 是包括 'bo'
+                    * rawCastValues = { id: 0, fooBar: '1' } 不包括 'bo'
+                    * 所以这里的 bo 是 isAbsent 的
+                    */,
+                    !hasOwn(castValues, key)/* isAbsent  */
+                  ) {
+                    const isAbsent = !hasOwn(castValues, key)
+                    const value = castValues[key]
+                    const props = rawCurrentProps
+                    const options = options
+                    const opt = options[key]
+                    if(!opt) return
+                    const hasDefault = hasOwn(opt, 'default')
+                    // default values
+                    if (hasDefault && value === undefined) {
+                      // 有默认值, 并且传入的 value 不等于 undefined, 才进行默认值的设置
+                      const defaultValue = opt.default
+                      if (
+                         // defaultValue 可以是一个函数
+                        isFunction(defaultValue)&&
+                        // 当 defaultValue 为函数时 就不可以设置属性类型, 与属性类型是互斥的
+                        // 当 defaultValue 为函数, 同时又有设置类型 type 时, 那么此时 type 类型优先
+                        // 不会执行默认值函数
+                        opt.type !== Function &&
+                        !opt.skipFactory
+                      ) {
+                        const { propsDefaults } = instance
+                        if (key in propsDefaults) {
+                          // 若是执行过一次属性默认值函数, 直接缓存中读取, 不在继续执行
+                          value = propsDefaults[key]
+                        } else {
+                          const reset = setCurrentInstance(instance)
+                          // 执行属性默认值函数, 并且缓存到 instance.propsDefaults 中,
+                          // 下次继续执行时, 从缓存中读取
+                          value = propsDefaults[key] = defaultValue.call(null, props)
+                          reset()
+                        }
+                      } else {
+                        value = defaultValue
+                      }
+                      // #9006 reflect default value on custom element
+                      if (instance.ce) {
+                        instance.ce._setProp(key, value)
+                      }
+                    }
+                    // 以上默认值已经设置
+
+                    // boolean casting
+                    if (opt[BooleanFlags.shouldCast]) {
+                      // 属性有 Boolean 类型
+                      if (isAbsent && !hasDefault) {
+                        // isAbsent 表示传入的 rawProps 即 instance.vnode.props
+                        // 中没有传入在组件 propsOptions 声明的属性,
+                        // 同时这个属性是有 Boolean 类型的 并且没有默认值, 那么将其值设置为 false
+                        value = false
+                      } else if (
+                        // [String, Boolean] - Stirng 在 Boolean 前面
+                        // 那么空字符会被转为 true, 或者是 value 与 key 相同会被设置为 true
+                        opt[BooleanFlags.shouldCastTrue] &&
+                        (value === '' || value === hyphenate(key))
+                      ) {
+                        value = true
+                      }
+                    }
+                    return value
+                  }
+                }
+              }
+              return hasAttrsChanged
+            }
+
+            // ensure all declared prop keys are present
+            // [NormalizedProps, string[]] | []
+            for (const key in instance.propsOptions[0]) {
+              if (!(key in props)) {
+                // 上面的 'd' 不在 { a: 0 } 故这里需要将组件声明的 d 属性放入 props, 即使用户没有传入
+                props[key] = undefined
+              }
+            }
+            // props: { a: 0, d: undefined }
+
+            // validation
+            if (__DEV__) {
+              validateProps(rawProps || {}, props, instance)
+            }
+
+            // 初始化时, 将传入的 props 进行响应式处理:
+            // 此时所有的属性默认值也已经执行了
             instance.props = shallowReactive(props)
-            instance.attrs = excludePropsOptions(props)
+
+            // 排除了属性中传入的 事件 prop
+            instance.attrs = attrs
           }
           // instance.slots = {}
-          initSlots(instance, children, optimized) {
+          // 这里对传入组件的 slots 进行初始化, 其中 slots 来源分为 2 部分:
+          // 1. 来自 vue 模板编译生成的 slots, 其中 slot 函数都是使用 withCtx 包装了, 其有 .c 标识为 true
+          // 2. 来自 vue h()函数生成的 slots, 此时需要对象 slots 进行 normalization, 最后的函数的 .c 标识为 false
+          // 通过返回的 slot 函数的 `.c` 标识来区分是具体某个 slot 来自 h 函数, 还是来自模板编译生成的 slot 函数
+          // 总之, 最后都是 normalization 过的 slot 函数, 其 slot 函数返回值都被转成了数组
+          // instance.slots = createInternalObject()
+          // 下面修改的 slot 都是在修改 instance.slots
+          // children 在 vnode 阶段, 就称为 children (可以是各种类型string, array, object)
+          // children 在 instance 阶段, 就成为 slots (此时必须是对象函数形式,函数返回值必须为数组)
+          initSlots(instance, instance.vnode.children, optimized) {
             const slots = createInternalObject()
             instance.slots = slots
             // 这里的 children 为 null, 直接返回不进行处理, instance.slots = {}
             // HINT: 这里的 ShapeFlags.SLOTS_CHILDREN 保证了 children 不会是 null
             if (instance.vnode.shapeFlag & ShapeFlags.SLOTS_CHILDREN) {
-              // 手写 render 函数传入的 slots
-              normalizeObjectSlots(children, slots, instance)(){
-                // 这里的 _ctx 在创建 vnode 时设置于 normalizeChildren 函数中
-                const ctx = children._ctx
+              // 传入 children 为对象
+              const type = (children as RawSlots)._
+              if (type) {
+                // compiled slots.
+                // - 有 `_` 属性
+                // - 有 `_withCtx` 包装后, `foo._c`, `default._c` 这些函数都是有 `._c` 标识
+                // - 无需 normalization (因为在编译器AST生成代码阶段已经进行了 normalization)
+                // {
+                //   foo: _withCtx(() => [...]), // .c -> true
+                //   bar: _withCtx(() => [...]), // .c -> true
+                //   car: _withCtx(() => [...]), // .c -> true
+                //   default: _withCtx(() => [...]), // .c -> true
+                //   _: SlotFlags // ._ -> true
+                // }
+                // optimized: 默认值为: !!n2.dynamicChildren
+                assignSlots(slots, children as Slots, optimized)
+                // make compiler marker non-enumerable
+                if (optimized) {
+                  def(slots, '_', type, true)
+                }
+              } else {
+                // h(Foo, null, {
+                //   foo: 1,
+                //   bar: () => 2,
+                //   car: () => [1, 'txt', null, vnode],
+                //   default: () => null
+                // })
+                // ==>
+                // h(Foo, null, {
+                //   foo: () => normalizeSlotValue(1), // .c -> false
+                //   bar: normalizeSlot(withCtx(() => normalizeSlotValue(bar()))), // .c -> false
+                //   car: normalizeSlot(withCtx(() => normalizeSlotValue(car()))), // .c -> false
+                //   default: normalizeSlot(withCtx(() => normalizeSlotValue(default()))) // .c -> false
+                // })
+
+                // normalizeSlotValue() -> 总是返回数组, 也就是最终的 slots 函数的返回值都要转为数组
+
+                // NOTE: 这里的 传入 normalizeObjectSlots 的 children 可以为 null/undefined, 因为
+                // for (const key in null) {} 不会报错
+                // for (const key in null) {} 也不会报错
+                // 手写 render 函数传入的 slots
+                normalizeObjectSlots(children, slots, instance)(){
+                  const rawSlots = children
+                  // ctx -> currentRenderingInstance
+                  // 这里的 _ctx 在创建 vnode 时设置于 normalizeChildren 函数中
+                  // for tracking slot owner instance. This is attached during
+                  // normalizeChildren when the component vnode is created.
+                  // _ctx 在组件 vnode 创建时:
+                  // 在 normalizeChildren 函数中将 currentRenderingInstance 设置到 children._ctx 上
+                  const ctx = rawSlots._ctx;
+                  // 注意这里的 rawSlots 可以为 null/undefined, 因为
+                  // for (const key in null) {} 不会报错
+                  // for (const key in null) {} 也不会报错
+                  for (const key in rawSlots) {
+                    // 排除 _, $stable
+                    if (isInternalKey(key)) continue;
+                    const value = rawSlots[key];
+                    if (isFunction(value)) {
+                      // 对 slot 函数进行包装
+                      // normalizeSlot h 函数中调用的, 里面也是调用了 withCtx, 但是将 withCtx 返回的函数中的
+                      // normalized._c 重置为 false
+                      instance.slots[key] = normalizeSlot(key, value, ctx) {
+                        const rawSlot = value;
+                        const normalized = withCtx(
+                          fn = (...args: any[]) => {
+                            return normalizeSlotValue(rawSlot(...args))
+                          }
+                        ){
+                          if (!ctx) return fn
+                          const renderFnWithContext: ContextualRenderFn = (...args: any[]) => {
+                            if (renderFnWithContext._d) {
+                              setBlockTracking(-1)
+                            }
+                            const prevInstance = setCurrentRenderingInstance(ctx)
+                            let res
+                            try {
+                              res = fn(...args)
+                            } finally {
+                              setCurrentRenderingInstance(prevInstance)
+                              if (renderFnWithContext._d) {
+                                setBlockTracking(1)
+                              }
+                            }
+                            return res
+                          }
+                          // mark normalized to avoid duplicated wrapping
+                          renderFnWithContext._n = true
+                          // mark this as compiled by default
+                          // this is used in vnode.ts
+                          // -> normalizeChildren() to set the slot rendering flag.
+                          renderFnWithContext._c = true
+                          // disable block tracking by default
+                          renderFnWithContext._d = true
+                          return renderFnWithContext
+                        }
+                        // h 函数中通过 normalizeSlot() 会显式的设置
+                        // withCtx 包装的 slot 函数的 `.c` 标识为 false, 以便将模板编译中调用的 withCtx 设置
+                        // 经过 withCtx 标识的 `.c` 为 true, 进行区分.
+                        // slot._c 为 true, 表示来自模板编译调用的 withCtx 包装的 slot 函数
+                        // slot._c 为 false, 表示不是来自模板编译,而是通过 h函数传入的 slots,
+                        //调用的 withCtx 包装的 slot 函数
+                        // NOT a compiled slot
+                        ;(normalized as ContextualRenderFn)._c = false
+                        return normalized
+                      };
+                    } else if (children) { {
+                      // h(Foo, null, null)
+                      // -> h(Foo, null, { default: () => normalizeSlotValue(null)})
+                      // h(Foo, null, 'hi')
+                      // -> h(Foo, null, { default: () => normalizeSlotValue('hi')})
+                      // h(Foo, null, ['hi', null])
+                      // -> h(Foo, null, { default: () => normalizeSlotValue(['hi', null])})
+                      // children 不是对象,
+                      // 默认设置到 instance.slots.default = normalizeSlotValue(children)
+                      // ShapeFlags.TEXT_CHILDREN
+                      //  - normalizeVNode('text')
+                      // ShapeFlags.ARRAY_CHILDREN
+                      //  - [normalizeVNode(vnode), normalizeVNode(Text), normalizeVNode('txt'), ..]
+                      normalizeVNodeSlots(instance, children) {
+                        const normalized = normalizeSlotValue(children) {
+                          return isArray(children)
+                            ? value.map(normalizeVNode)
+                            : [normalizeVNode(value as VNodeChild)]
+                        }
+                        instance.slots.default = () => normalized
+                      }
+                    }
+                  }
+                }
               }
             } else if (children) {
               // 不是对象, 统一将其设置到 default 中
@@ -400,7 +1024,20 @@ app.mount(container, isHydrate) {
               // 执行 setup 函数
               // setup(props, { emit, slots, attrs, expose }) {}
               const setupResult = setup(instance.props, setupContext) => {
-                // 用户组件 setup 函数可能写入的代码:
+                // 用户组件 setup 函数的业务代码:
+
+                // 获取用户传入的 props 值 或者组件声明属性的默认执行
+                const props = instance.props
+                // 获取传入的 slots, attrs,
+                // 其中 emit, expose 为绑定组件实例的函数
+                // emit('event')
+                //  -> 去查找父组件传给当前组件的 props 查找对应的事件绑定的函数
+                // expose({...})
+                //  -> instance.exposed = {} -> 其他组件通过 ref 获取对象就是这里的 expose 传入的对象值
+                const { emit, slots, attrs, expose } = setupContext
+
+                // 到这里 slots 一定是对象, 因为前面的 initSlots 已经处理了
+                // slots.bar._c 可以判断出 是否来自 编译 slot, 还是用户手写的 slot
 
                 // issues: https://github.com/vuejs/core/issues/2043
                 // 同时在父组件中依赖 ctx.mgs.value

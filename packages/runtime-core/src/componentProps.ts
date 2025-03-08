@@ -418,14 +418,23 @@ function setFullProps(
       let camelKey
       if (options && hasOwn(options, (camelKey = camelize(key)))) {
         if (!needCastKeys || !needCastKeys.includes(camelKey)) {
+          // rawProps: { id: 0,  data: [], "foo-bar": '1', 'bar-foo': '2', onUp: fn }
+          // 这里的 camelKey 是在遍历 rawProps 传入的 key, 但是这里在 options 中定义的 key `bo`
+          // 没有传入进来
+          // needCastKeys = ["id", "bo", "fooBar"]
+          // options: { id, data, bo, fooBar}
           props[camelKey] = value
         } else {
           ;(rawCastValues || (rawCastValues = {}))[camelKey] = value
         }
       } else if (!isEmitListener(instance.emitsOptions, key)) {
+        // 执行到这里说明 key 不在组件声明的属性中, 那么余下来的 key 就还可能是 emitsOptions 的 key
+        // 比如用户传入了 onFooBar 的属性 key, 若是去除了 on 的属性 fooBar 存在于 emitsOptions 中,
+        // 那么就表示此 key 是属于 emitsOptions 的事件 key, 此时不应放入 attrs 中
         // Any non-declared (either as a prop or an emitted event) props are put
         // into a separate `attrs` object for spreading. Make sure to preserve
         // original key casing
+        // 任何非声明的属性(既不是属性也不是发射的事件) 放入 attrs 中, 其 key 不进行 camelCase 转换
         if (__COMPAT__) {
           if (isOn(key) && key.endsWith('Native')) {
             key = key.slice(0, -6) // remove Native postfix
@@ -433,14 +442,17 @@ function setFullProps(
             continue
           }
         }
+        // attrs 中 key 没有转 camelCase, 保持原来的 key 形式
         if (!(key in attrs) || value !== attrs[key]) {
           attrs[key] = value
+          // 这里赋值时, 有比较值是否变化, 若是变化, 这里设置 hasAttrsChanged 为 true
           hasAttrsChanged = true
         }
       }
     }
   }
 
+  // 处理默认值
   if (needCastKeys) {
     const rawCurrentProps = toRaw(props)
     const castValues = rawCastValues || EMPTY_OBJ
@@ -452,6 +464,19 @@ function setFullProps(
         key,
         castValues[key],
         instance,
+        /* 什么场景会出现 isAbsent ?
+         * 当传入的 rawProps:
+         * propsOptions: { id, data, bo, fooBar}
+         * rawProps: { id: 0,  data: [], "foo-bar": '1', 'bar-foo': '2' }
+         * 这里的 camelKey 是在遍历 rawProps 传入的 key, 但是这里在 options 中定义的 key `bo`
+         * 没有传入进来
+         * needCastKeys = ["id", "bo", "fooBar"]
+         * options: { id, data, bo, fooBar}
+         * 并没有包括组件声明的中属性时, 比如这里的 'bo'
+         * 而 needCastKeys = ["id", "bo", "fooBar"] 是包括 'bo'
+         * rawCastValues = { id: 0, fooBar: '1' } 不包括 'bo'
+         * 所以这里的 bo 是 isAbsent 的
+         */
         !hasOwn(castValues, key),
       )
     }
@@ -506,6 +531,8 @@ function resolvePropValue(
       if (isAbsent && !hasDefault) {
         value = false
       } else if (
+        // [String, Boolean] - Stirng 在 Boolean 前面
+        // 那么空字符会被转为 true, 或者是 value 与 key 相同会被设置为 true
         opt[BooleanFlags.shouldCastTrue] &&
         (value === '' || value === hyphenate(key))
       ) {
@@ -527,6 +554,9 @@ export function normalizePropsOptions(
     __FEATURE_OPTIONS_API__ && asMixin ? mixinPropsCache : appContext.propsCache
   const cached = cache.get(comp)
   if (cached) {
+    // 将组件声明的 props 进行 normalizePropsOptions 后, 就进行了缓存, 避免了
+    // 每次创建同一个组件的不同实例, 都要进行一次 normalization 操作, 这里同一个组件的 propOptions
+    // 只进行一次 normalization 操作, 后面相同的组件实例时,只从缓存中取, 避免重复的 normalization
     return cached
   }
 
@@ -569,24 +599,44 @@ export function normalizePropsOptions(
       if (__DEV__ && !isString(raw[i])) {
         warn(`props must be strings when using array syntax.`, raw[i])
       }
-      const normalizedKey = camelize(raw[i])
+      // props: ['id', 'foo-bar'] -> { id: {}, fooBar: {} }
+      // 属性名统一为 驼峰命名
+      // 这里的 key 也需要 normalization 就是统一格式为 camelCase
+      const normalizedKey = camelize(raw[i]) // fooBar
       if (validatePropName(normalizedKey)) {
+        // 声明的属性名称不可以是 key[0] !== '$' 第一个字符是以 $ 开头
+        // 声明的属性名不可以是下面的保留字符 - 注意这里的空字符 '' 也是 vue 的保留的内部属性名
+        // // the leading comma is intentional so empty string "" is also included
+        // ',key,ref,ref_for,ref_key,' +
+        // 'onVnodeBeforeMount,onVnodeMounted,' +
+        // 'onVnodeBeforeUpdate,onVnodeUpdated,' +
+        // 'onVnodeBeforeUnmount,onVnodeUnmounted',
         normalized[normalizedKey] = EMPTY_OBJ
+        // { id: {}, fooBar: {} }
       }
     }
   } else if (raw) {
     if (__DEV__ && !isObject(raw)) {
       warn(`invalid props options`, raw)
     }
+    // 注意在 for in 中 这里的 raw 即使是 undefined/null 都不会报错
+    // for (const key in '') {}
+    // for (const key in null) {}
+    // for (const key in undefined) {} 都不会报错
     for (const key in raw) {
       const normalizedKey = camelize(key)
+      // 首先是 key 的 normalization, 转为驼峰命名
       if (validatePropName(normalizedKey)) {
         const opt = raw[key]
+        // props: { id: [String, Number], data: Array,  'foo-bar': { type: String } }
+        //              isArray                 isFunction         otherwise
+        // 每个属性可以是 数组, 类型函数(String,Boolean,Number,Array, ...), 对象
         const prop: NormalizedProp = (normalized[normalizedKey] =
           isArray(opt) || isFunction(opt) ? { type: opt } : extend({}, opt))
+        // 最终转为对象形式: { id: { type: [String, Number] }, data: { type: Array }}
         const propType = prop.type
-        let shouldCast = false
-        let shouldCastTrue = true
+        let shouldCast = false // 应该类型转换
+        let shouldCastTrue = true // 类型转换到 true
 
         if (isArray(propType)) {
           for (let index = 0; index < propType.length; ++index) {
@@ -602,23 +652,67 @@ export function normalizePropsOptions(
               // passed as `<Comp checked="">` or `<Comp checked="checked">`
               // will either be treated as strings or converted to a boolean
               // `true`, depending on the order of the types.
+              // 表示在多个类型中, String 在 Boolean 前面
               shouldCastTrue = false
             }
           }
         } else {
+          // 类型只有一种 并且类型是 Boolean, 那么 shouldCast 为 true
           shouldCast = isFunction(propType) && propType.name === 'Boolean'
         }
+        // Boolean: shouldCast = true, shouldCastTrue = true
+        // [Boolean, String]: shouldCast = true, shouldCastTrue = true
+        // [String, Boolean]: shouldCast = true, shouldCastTrue = false
+        // [String, !Boolean]: shouldCast = false, shouldCastTrue = false
+        // other: shouldCast = false, shouldCastTrue = true
 
-        prop[BooleanFlags.shouldCast] = shouldCast
+        prop[BooleanFlags.shouldCast] = shouldCast // 为 true, 属性有 Boolean 类型
         prop[BooleanFlags.shouldCastTrue] = shouldCastTrue
+        // 为 true ->  [Boolean, String]
+        // 为 false -> [String,  Boolean]
         // if the prop needs boolean casting or default value
         if (shouldCast || hasOwn(prop, 'default')) {
+          // 表示有默认值的属性或者是有类型有 Boolean 属性
           needCastKeys.push(normalizedKey)
         }
       }
     }
   }
-
+  // {
+  //   id: [String, Number, Boolean],
+  //   bo: [Boolean, Number, String],
+  //   data: Array,
+  //   'foo-bar': { type: String, default: "foo" }
+  // }
+  // =>
+  // [
+  //   {
+  //     id: {
+  //        // 多个类型中, Boolean 在 String 前面
+  //        type: [Boolean, Number, String],
+  //        [BooleanFlags.shouldCast]: true,
+  //        [BooleanFlags.shouldCastTrue]: true // Boolean 在 String 前面
+  //     },
+  //     bo: {
+  //        // 多个类型中, String 在 Boolean 前面
+  //        type: [String, Number, Boolean],
+  //        [BooleanFlags.shouldCast]: true,
+  //        [BooleanFlags.shouldCastTrue]: false // Boolean 在 String 后面
+  //     },
+  //     data: {
+  //        type: Array,
+  //        [BooleanFlags.shouldCast]: false,
+  //        [BooleanFlags.shouldCastTrue]: true
+  //     },
+  //     fooBar: {
+  //        type: String,
+  //        default: "foo",
+  //        [BooleanFlags.shouldCast]: false,
+  //        [BooleanFlags.shouldCastTrue]: true
+  //     }
+  //   },
+  //   ["id", "bo", "fooBar"] // 最后一个属性放置的是: 有 Boolean 类型的属性, 或者有默认值的属性
+  // ]
   const res: NormalizedPropsOptions = [normalized, needCastKeys]
   if (isObject(comp)) {
     cache.set(comp, res)

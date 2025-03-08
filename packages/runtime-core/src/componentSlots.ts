@@ -107,6 +107,12 @@ const normalizeSlot = (
     }
     return normalizeSlotValue(rawSlot(...args))
   }, ctx) as Slot
+  // h 函数中通过 normalizeSlot() 会显式的设置
+  // withCtx 包装的 slot 函数的 `.c` 标识为 false, 以便将模板编译中调用的 withCtx 设置
+  // 经过 withCtx 标识的 `.c` 为 true, 进行区分.
+  // slot._c 为 true, 表示来自模板编译调用的 withCtx 包装的 slot 函数
+  // slot._c 为 false, 表示不是来自模板编译,而是通过 h函数传入的 slots,
+  // 调用的 withCtx 包装的 slot 函数
   // NOT a compiled slot
   ;(normalized as ContextualRenderFn)._c = false
   return normalized
@@ -192,15 +198,29 @@ export const initSlots = (
   children: VNodeNormalizedChildren,
   optimized: boolean,
 ): void => {
+  // 这里对传入组件的 slots 进行初始化, 其中 slots 来源分为 2 部分:
+  // 1. 来自 vue 模板编译生成的 slots, 其中 slot 函数都是使用 withCtx 包装了, 其有 .c 标识为 true
+  // 2. 来自 vue h()函数生成的 slots, 此时需要对象 slots 进行 normalization, 最后的函数的 .c 标识为 false
+  // 通过返回的 slot 函数的 `.c` 标识来区分是具体某个 slot 来自 h 函数, 还是来自模板编译生成的 slot 函数
+  // 总之, 最后都是 normalization 过的 slot 函数, 其 slot 函数返回值都被转成了数组
   // instance.slots = createInternalObject()
   // 下面修改的 slot 都是在修改 instance.slots
   const slots = (instance.slots = createInternalObject())
   // HINT: 这里的 ShapeFlags.SLOTS_CHILDREN 保证了 children 不会是 null
   if (instance.vnode.shapeFlag & ShapeFlags.SLOTS_CHILDREN) {
     // 传入 children 为对象
-    // _ 标识 来自编译器生成的 slots
+    // 有 `_` 属性
+    // 有 `_withCtx` 包装后, `foo._c`, `default._c` 这些函数都是有 `._c` 标识
     const type = (children as RawSlots)._
     if (type) {
+      // compiled slots. - 无需 normalization (因为在编译器AST生成代码阶段已经进行了 normalization)
+      // {
+      //   foo: _withCtx(() => [...]), // .c -> true
+      //   bar: _withCtx(() => [...]), // .c -> true
+      //   car: _withCtx(() => [...]), // .c -> true
+      //   default: _withCtx(() => [...]), // .c -> true
+      //   _: SlotFlags // ._ -> true
+      // }
       // optimized: 默认值为: !!n2.dynamicChildren
       assignSlots(slots, children as Slots, optimized)
       // make compiler marker non-enumerable
@@ -208,6 +228,7 @@ export const initSlots = (
         def(slots, '_', type, true)
       }
     } else {
+      // 否则是来自 h 函数, 需要重新 normalization
       // h(Foo, null, {
       //   foo: 1,
       //   bar: () => 2,
@@ -216,11 +237,13 @@ export const initSlots = (
       // })
       // ==>
       // h(Foo, null, {
-      //   foo: () => normalizeVNode(foo),
-      //   bar: () => normalizeVNode(bar()),
-      //   car: () => normalizeVNode(car()),
-      //   default: () => normalizeVNode(default())
+      //   foo: () => normalizeSlotValue(1), // .c -> false
+      //   bar: normalizeSlot(withCtx(() => normalizeSlotValue(bar()))), // .c -> false
+      //   car: normalizeSlot(withCtx(() => normalizeSlotValue(car()))), // .c -> false
+      //   default: normalizeSlot(withCtx(() => normalizeSlotValue(default()))) // .c -> false
       // })
+
+      // normalizeSlotValue() -> 总是返回数组, 也就是最终的 slots 函数的返回值都要转为数组
 
       // NOTE: 这里的 传入 normalizeObjectSlots 的 children 可以为 null/undefined, 因为
       // for (const key in null) {} 不会报错
@@ -228,15 +251,68 @@ export const initSlots = (
 
       // 手写 render 函数传入的 slots
       normalizeObjectSlots(children as RawSlots, slots, instance)
+      // {
+      //   const rawSlots = children
+      //   for (const key in rawSlots) {
+      //     const value = rawSlots[key]
+      //     if (isFunction(value)) {
+      //       // normalizeSlot h 函数中调用的, 里面也是调用了 withCtx, 但是将 withCtx 返回的函数中的
+      //       // normalized._c 重置为 false
+      //       slots[key] = normalizeSlot(key, value, ctx) {
+      //         const rawSlot = value
+      //         const normalized = withCtx(fn = (...args: any[]) => {
+      //           return normalizeSlotValue(rawSlot(...args))
+      //         } {
+      //           if (!ctx) return fn
+      //           const renderFnWithContext: ContextualRenderFn = (...args: any[]) => {
+      //             if (renderFnWithContext._d) {
+      //               setBlockTracking(-1)
+      //             }
+      //             const prevInstance = setCurrentRenderingInstance(ctx)
+      //             let res
+      //             try {
+      //               res = fn(...args)
+      //             } finally {
+      //               setCurrentRenderingInstance(prevInstance)
+      //               if (renderFnWithContext._d) {
+      //                 setBlockTracking(1)
+      //               }
+      //             }
+      //             return res
+      //           }
+      //           // mark normalized to avoid duplicated wrapping
+      //           renderFnWithContext._n = true
+      //           // mark this as compiled by default
+      //           // this is used in vnode.ts -> normalizeChildren() to set the slot rendering flag.
+      //           renderFnWithContext._c = true
+      //           // disable block tracking by default
+      //           renderFnWithContext._d = true
+      //           return renderFnWithContext
+      //         }
+      //         // h 函数中通过 normalizeSlot() 会显式的设置
+      //         // withCtx 包装的 slot 函数的 `.c` 标识为 false, 以便将模板编译中调用的 withCtx 设置
+      //         // 经过 withCtx 标识的 `.c` 为 true, 进行区分.
+      //         // slot._c 为 true, 表示来自模板编译调用的 withCtx 包装的 slot 函数
+      //         // slot._c 为 false, 表示不是来自模板编译,而是通过 h函数传入的 slots,
+      //         //调用的 withCtx 包装的 slot 函数
+      //         // NOT a compiled slot
+      //         ;(normalized as ContextualRenderFn)._c = false
+      //         return normalized
+      //       })
+      //     }
+      //   }
+      // }
     }
   } else if (children) {
-    // h(Foo, null, null)         -> h(Foo, null, { default: () => normalizeVNode(null)})
-    // h(Foo, null, 'hi')         -> h(Foo, null, { default: () => normalizeVNode('hi')})
-    // h(Foo, null, ['hi', null]) -> h(Foo, null, { default: () => normalizeVNode(['hi', null])})
+    // h(Foo, null, null)         -> h(Foo, null, { default: () => normalizeSlotValue(null)})
+    // h(Foo, null, 'hi')         -> h(Foo, null, { default: () => normalizeSlotValue('hi')})
+    // h(Foo, null, ['hi', null]) -> h(Foo, null, { default: () => normalizeSlotValue(['hi', null])})
     // children 不是对象,
     // 默认设置到 instance.slots.default = normalizeSlotValue(children)
-    // ShapeFlags.TEXT_CHILDREN  - 'text'
-    // ShapeFlags.ARRAY_CHILDREN - [vnode, Text, 'txt', ...]
+    // ShapeFlags.TEXT_CHILDREN
+    //  - normalizeVNode('text')
+    // ShapeFlags.ARRAY_CHILDREN
+    //  - [normalizeVNode(vnode), normalizeVNode(Text), normalizeVNode('txt'), ...]
     normalizeVNodeSlots(instance, children)
   }
 }
@@ -252,7 +328,7 @@ export const updateSlots = (
   if (vnode.shapeFlag & ShapeFlags.SLOTS_CHILDREN) {
     const type = (children as RawSlots)._
     if (type) {
-      // compiled slots.
+      // compiled slots. - 无需 normalization (因为在编译器AST生成代码阶段已经进行了 normalization)
       if (__DEV__ && isHmrUpdating) {
         // Parent was HMR updated so slot content may have changed.
         // force update slots and mark instance for hmr as well
@@ -268,7 +344,9 @@ export const updateSlots = (
         assignSlots(slots, children as Slots, optimized)
       }
     } else {
+      // 否则是来自 h 函数, 需要重新 normalization
       needDeletionCheck = !(children as RawSlots).$stable
+      // 需要对新创建的 vnode 中的 slots 进行 normalization, 老的 vnode 中的 slots 已经 normalization 过了
       normalizeObjectSlots(children as RawSlots, slots, instance)
     }
     deletionComparisonTarget = children as RawSlots

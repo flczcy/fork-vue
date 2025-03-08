@@ -114,6 +114,7 @@ export function emit(
   ...rawArgs: any[]
 ): ComponentPublicInstance | null | undefined {
   if (instance.isUnmounted) return
+  // 这里查找的是 instance.vnode.props, 而不是组件声明的属性 instance.props
   const props = instance.vnode.props || EMPTY_OBJ
 
   if (__DEV__) {
@@ -191,11 +192,12 @@ export function emit(
 
   let handlerName
   let handler =
-    // emit("fooBar") -> props["onFooBar"]
-    // emit("update:fooBar") -> props["onUpdate:fooBar"]
+    // 首先查找不经过转换的 event, 然后再是转换 camelCase 的是事件
+    // emit("fooBar")        -> props["onFooBar"]        -> props["onFooBar"]
+    // emit("update:fooBar") -> props["onUpdate:fooBar"] -> props["onUpdate:fooBar"]
+    // emit("foo-bar")       -> props["onFoo-bar"]       -> props["onFooBar"]
     props[(handlerName = toHandlerKey(event))] ||
     // also try camelCase event handler (#2249)
-    // emit("foo-bar") -> props["onFooBar"]
     props[(handlerName = toHandlerKey(camelize(event)))]
 
   // <F v-model='c'/>
@@ -230,9 +232,15 @@ export function emit(
   //   @input="$emit('update:fooBar', $event.target.value)"
   // />
 
+  // 当以上在 isModelListener 中:
+  // props['onUpdate:fooBar'] 找不到属性时,
+  // 此时这里再尝试使用 hyphenate 形式进行查找
+  // props['onUpdate:foo-bar'] 才可以在属性中找到对应的事件函数
+
   // for v-model update:xxx events, also trigger kebab-case equivalent
   // for props passed via kebab-case
   if (!handler && isModelListener) {
+    // 针对 `update:` 开始的事件
     // 手动传入属性
     // h(Foo, {
     //   'foo-bar': _ctx.val, // 用于接收的初始值
@@ -240,10 +248,13 @@ export function emit(
     // })
     // 在 Foo 组件中
     // <input
-    //   :value="props['foo-bar']" // 接收来自组件的属性 'foo-bar' 的初始值
+    //   :value="$props['fooBar']" // 接收来自组件的属性 'foo-bar' 的初始值, 注意这里属性使用 camelCase
     //   @input="$emit('update:fooBar', $event.target.value)" // 通知组件更新 'foo-bar' 属性的值
     // />
-    // 此时需要 'update:fooBar' -> 'onUpdate:foo-bar'  才可以在属性中找到对应的事件函数
+    // 当 以上的
+    // props['onUpdate:fooBar'] 找不到属性时,
+    // 此时这里再尝试使用 hyphenate 形式进行查找
+    // props['onUpdate:foo-bar'] 才可以在属性中找到对应的事件函数
     handler = props[(handlerName = toHandlerKey(hyphenate(event)))]
   }
 
@@ -289,6 +300,14 @@ export function normalizeEmitsOptions(
     return cached
   }
 
+  // emits: ['up', 'foo-bar', 'update:modalValue', 'update:foo-bar', 'update:fooBar'],
+  // emits: {
+  //   up: null,
+  //   'foo-bar': () => {},
+  //   'update:modalValue': null,
+  //   'update:foo-bar': null,
+  //   'update:fooBar': null
+  // }
   const raw = comp.emits
   let normalized: ObjectEmitsOptions = {}
 
