@@ -325,6 +325,12 @@ app.mount(container, isHydrate) {
               // needCastKeys:
               ["id", "bo", "fooBar"] // 最后一个属性放置的是: 有 Boolean 类型的属性, 或者有默认值的属性
             ],
+            // NOTE:
+            // 组件中声明的属性名称全部都会被为转为 camelCase
+            // 同时下面 initProps 时, 也会将组件的中的属性 key 设置为 camelCase
+            // instance.propsOptions 中的 key 是进行 camelize 的, 都是 camelCase
+            // instance.props 中的 key 是进行 camelize 的, 都是 camelCase
+            // instance.attrs 中的 key 不进行 camelize, 保持原始传入的 key
             propsOptions: normalizePropsOptions(type, appContext) => {
               const comp = type
               const cache = appContext.propsCache
@@ -543,7 +549,11 @@ app.mount(container, isHydrate) {
         setupComponent(instance, false, optimized) => {
           const isStateful = isStatefulComponent(instance) => {};
           const { props, children } = instance.vnode;
+          // instance.propsOptions 中的 key 是进行 camelize 的, 都是 camelCase
           // props 属性的读取都是统一转成 camelCase, 而 attrs 中则没有转换
+          // NOTE:
+          // instance.props 中的 key 是进行 camelize 的, 都是 camelCase
+          // instance.attrs 中的 key 不进行 camelize, 保持原始传入的 key
           initProps(instance, instance.vnode.props, isStateful, isSSR) {
             // rawProps -> instance.props 表示创建 vnode 时传入的 Props
             // h(Foo, rawProps, children), 这里的 rawProps 内部可以传入任意的属性,

@@ -11,6 +11,7 @@ import { isArray } from '@vue/shared'
  */
 export function reactiveReadArray<T>(array: T[]): T[] {
   const raw = toRaw(array)
+  // 相等说明不是响应式对象, 直接返回, 不进行 track
   if (raw === array) return raw
   track(raw, TrackOpTypes.ITERATE, ARRAY_ITERATE_KEY)
   return isShallow(array) ? raw : raw.map(toReactive)

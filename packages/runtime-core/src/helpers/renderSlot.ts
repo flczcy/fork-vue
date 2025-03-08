@@ -22,6 +22,12 @@ import { isAsyncWrapper } from '../apiAsyncComponent'
  * Compiler runtime helper for rendering `<slot/>`
  * @private
  */
+// <slot a=2 b=3 d=5 />
+// _renderSlot(_ctx.$slots, "default", { a: "2", b: "3", d: "5" }),
+// <slot name="foo" a=2 b=3 d=5 />
+// _renderSlot(_ctx.$slots, "foo", { a: "2", b: "3", d: "5" }),
+// <slot name="foo" a=2 b=3 >fallback</slot>
+// _renderSlot(_ctx.$slots, "foo", { a: "2", b: "3" }, () => [ _createTextVNode("fallback") ])
 export function renderSlot(
   slots: Slots,
   name: string,
@@ -55,6 +61,7 @@ export function renderSlot(
   let slot = slots[name]
 
   if (__DEV__ && slot && slot.length > 1) {
+    // 这里是检查 slot 函数的参数是否大于 1 个体
     warn(
       `SSR-optimized slot function detected in a non-SSR-optimized render ` +
         `function. You need to mark this component with $dynamic-slots in the ` +
@@ -67,6 +74,7 @@ export function renderSlot(
   // invocation interfering with template-based block tracking, but in
   // `renderSlot` we can be sure that it's template-based so we can force
   // enable it.
+  // 用户手写的 render 函数中处理的 slot 函数, 其 _c 为 false
   if (slot && (slot as ContextualRenderFn)._c) {
     ;(slot as ContextualRenderFn)._d = false
   }
@@ -79,14 +87,20 @@ export function renderSlot(
     // key attached in the `createSlots` helper, respect that
     (validSlotContent && (validSlotContent as any).key)
   const rendered = createBlock(
+    // <slot key="" /> 是作为一个 Fragment 来渲染的, 因为 slot 可以被传入多个平行节点
     Fragment,
+    // props
     {
+      // `_${name}` + ``
+      // `_${name}` + `_fb`
       key:
         (slotKey && !isSymbol(slotKey) ? slotKey : `_${name}`) +
         // #7256 force differentiate fallback content from actual content
         (!validSlotContent && fallback ? '_fb' : ''),
     },
+    // children
     validSlotContent || (fallback ? fallback() : []),
+    // patchFlag
     validSlotContent && (slots as RawSlots)._ === SlotFlags.STABLE
       ? PatchFlags.STABLE_FRAGMENT
       : PatchFlags.BAIL,
@@ -100,16 +114,22 @@ export function renderSlot(
   return rendered
 }
 
+// 确保所有的 vnode 都不是注释节点
 export function ensureValidVNode(
   vnodes: VNodeArrayChildren,
 ): VNodeArrayChildren | null {
   // some 函数, 只要有一个返回 true, 则返回 true
+  // 返回 true 的话 最终返回 vnodes
+  // 返回 false 的话 最终返回 null
+  //    1. vnodes 全是注释 最终返回 null
+  //    2. vnodes 中 Fragment 中 vnodes 也全都是注释, 最终返回 null
+  // 否则最终返回 vnodes
   return vnodes.some(child => {
     if (!isVNode(child)) return true
-    // 1. child 不是 vnode, 直接返回 true, 不在往下遍历
+    // 1. child 不是 vnode, 直接返回 true, 不再往下遍历
     // 2. child 就是 vnode,
     //    2.1 比较 vnode.type 若全都是注释, 返回 false, 否则返回 true
-    //    2.2 比较 vnode.type 若是 Fragment, 继续递归比较子元素若全都是注释节点则返回 false,否则返回 true
+    //    2.2 比较 vnode.type 若是 Fragment, 继续递归比较子元素若全都是注释节点则返回 false, 否则返回 true
     if (child.type === Comment) return false
     if (
       child.type === Fragment &&

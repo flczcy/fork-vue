@@ -688,6 +688,13 @@ export function createComponentInstance(
     //     data: [1, 2, 3] // 是否存在组件的 propsOptions, 存在放入 instance.props
     //   }
     // )
+    // props: ['id', 'foo-bar'] -> { id: {}, fooBar: {} }
+    // NOTE:
+    // 组件中声明的属性名称全部都会被为转为 camelCase
+    // 同时下面 initProps 时, 也会将组件的中的属性 key 设置为 camelCase
+    // instance.propsOptions 中的 key 是进行 camelize 的, 都是 camelCase
+    // instance.props 中的 key 是进行 camelize 的, 都是 camelCase
+    // instance.attrs 中的 key 不进行 camelize, 保持原始传入的 key
     propsOptions: normalizePropsOptions(type, appContext),
     // ['a', 'b'] => { a: null, b: null}
     // { a: () => {}, b: null }
@@ -860,6 +867,10 @@ export function setupComponent(
   // 将传入的 props 分为 props, attrs, 分别设置到 instance 上
   // instance.props = props.props
   // instance.attrs = props.attrs
+  // NOTE:
+  // instance.propsOptions 中的 key 是进行 camelize 的, 都是 camelCase
+  // instance.props 中的 key 是进行 camelize 的, 都是 camelCase
+  // instance.attrs 中的 key 不进行 camelize, 保持原始传入的 key
   initProps(instance, props, isStateful, isSSR)
   // instance.slots = {}
   initSlots(instance, children, optimized)
