@@ -152,7 +152,7 @@ dep.trigger() {
             //     |flushIndex
             //     queueJob(2) -> 只能在 flushIndex 后面进行插入, 即使这里的 2 比 3 小, 也要插入在 3 的后面
             // [1, 3, 2, 5, 6, 7]
-          for (flushIndex = 0; flushIndex < queue.length; flushIndex++) {
+            for (flushIndex = 0; flushIndex < queue.length; flushIndex++) {
               const job = queue[flushIndex]
               // job 没有 DISPOSED 标识, 表示没有被废弃
               if (job && !(job.flags! & SchedulerJobFlags.DISPOSED)) {

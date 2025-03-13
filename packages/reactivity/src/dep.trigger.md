@@ -150,6 +150,8 @@ dep.trigger() {
             // 会设置 RUNNING 标识, 后面避免在 instance.update() 中执行时, 触发 dep.trigger() 再次将执行中
             // update 函数放入队列中, 导致重复更新
             e.run() {
+              // 对于组件来说,这里的 run 其实就是执行 schedule() => queueJob(instance.update)
+              // 这里面是在异步队列中执行
               if (this.flags & EffectFlags.ACTIVE) return
               e.flags |= EffectFlags.RUNNING
               prepareDeps(this) {
