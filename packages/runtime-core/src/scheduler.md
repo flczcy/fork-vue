@@ -165,6 +165,71 @@ dep.trigger() {
                   job.flags! &= ~SchedulerJobFlags.QUEUED
                 }
                 job() {
+                  // job = effect.runIfDirty.bind(effect)
+                  // update = effect.run.bind(effect)
+                  // 来自父组件的更新, 在父组件的更新中, 调用子组件的更新函数
+                  // instance.update() -> effect.run() -> componentUpdateFn()
+                  parentJob() {
+                    // [parentJob, childJob]
+                    // -> parentJob() 调用了 子组件的更新函数
+                    // -> childJob() 执行时又会再次调用子组件的更新函数 - 这里的子组件的更新函数就会执行两次
+                    instance.update() {
+                      effect.run(){
+                        effect.flags |= EffectFlags.RUNNING
+                        componentUpdateFn() {
+                          toggleRecurse({ effect, job }, allowed)(instance, false){
+                            if (allowed) {
+                              effect.flags |= EffectFlags.ALLOW_RECURSE
+                              job.flags! |= SchedulerJobFlags.ALLOW_RECURSE
+                            } else {
+                              effect.flags &= ~EffectFlags.ALLOW_RECURSE
+                              job.flags! &= ~SchedulerJobFlags.ALLOW_RECURSE
+                            }
+                          }
+                          updateProps() {}
+                          updateSlots() {}
+                          toggleRecurse(instance, true)
+                          const nextTree = renderComponentRoot(instance)
+                          const prevTree = instance.subTree
+                          patch(prevTree, nextTree) {
+                            if (shouldUpdateComponent(prevTree, nextTree)) {
+                              // ...
+                            }
+                          }
+                        }
+                        effect.flags &= ~EffectFlags.RUNNING
+                      }
+                    }
+                    // 后面执行 childJob() 时, 又会调用 componentUpdateFn() 但是关键来了:
+                    childJob() {
+                      // 执行 job 时, 这里会进行一次脏检查, 因为这里的 effect 之前是在父组件的更新中,
+                      // 执行的是 effect.run(), 无需脏检查, 此处执行这里的 job -> 默认所有的 job
+                      // 都是需要脏检查的, 在创建组件时, 就是将
+                      // job 绑定为    effect.runIfDirty.bind(effect)
+                      // update 绑定为 effect.run.bind(effect)
+                      // 所以当父组件调用一次 instance.update() 时, 会执行 effect.run() 后,
+                      // 此时再次执行后面的 childJob() 时, 会进行一次脏检查, 此时发现 effect 已经不脏了,
+                      // 所以就跳过了此处的 job 执行:
+                      // 这样就实现了在父组件更新时, 子组件只更新一次, 即使后面的子组件 job 再次执行,
+                      // 但是 effect 已经不脏了, 所以就跳过了此处的 job 执行.
+                      // 这就解决了父组件更新时, 触发子组件更新, 同时后面又还有子组件的 job时, 不会重复执行的问题
+                      // [parentJob, childJob]
+                      // [
+                      //   parentJob(instance.update(effect.run)), {
+                      //     当父组件更新时, 触发子组件更新, 是直接调用 effect.run()
+                      //   }
+                      //   childJob(effect.runIfDirty(effect.run)) {
+                      //     轮到子组件的 job 执行时:
+                      //     不是直接执行 effect.run()  而是先执行 effect.runIfDirty()
+                      //     判断 effect 是脏的还是不脏的, 若是脏的, 则执行 effect.run()
+                      //     若是不脏(即被父组件执行过一次后,link.version与dep.version已经同步了)的,
+                      //     则跳过此处的 job 执行
+                      //   }
+                      // ]
+                      effect.runIfDirty()
+                    }
+                  }
+
                   // job() 中又重复插入自己
                   // queueJob(job) 执行 job 时, 又增加新的 job
                   // 此时的 flushIndex 就是当前正在执行的这个 job 所在 queue 中 index
@@ -246,23 +311,23 @@ dep.trigger() {
                     }
                   }
                   // 在 job 内部执行 所有的带有 PRE 标识的 job, 执行完后从队列中移除该函数
-                flushPreFlushCbs(instance， seen, i = flushIndex + 1) {
-                  // 这里 flushIndex 的初始值为 -1，所以即使这里不在 queue job 执行里面调用也是可以的
-                  // 1. job 外部调用，那么此时的 flushIndex 为 -1，这里再 +1 就是 0 也不会导致数组越界
-                  // 2. job 内部调用，此时的 flushIndex 就是当前正在执行的 job 在队列中的 index，所以这里 + 1
-                  //    表示从下一个 job 开始逐个查找 PRE 标识的 job 进行同步执行
-                  //    此时会阻塞当前正在执行的 job, 直到队列中所有的 job.PRE 执行完毕后，才会继续往下执行当前 job
-                  //    同时注意 job.PRE 执行完一次后就会从队列中移除
-                  for (; i < queue.length; i++) {
-                    const cb = queue[i]
-                    if (cb && cb.flags! & SchedulerJobFlags.PRE) {
-                      queue.splice(i, 1) // 从 queue 中移除
-                      i--
-                      cb()
+                  flushPreFlushCbs(instance， seen, i = flushIndex + 1) {
+                    // 这里 flushIndex 的初始值为 -1，所以即使这里不在 queue job 执行里面调用也是可以的
+                    // 1. job 外部调用，那么此时的 flushIndex 为 -1，这里再 +1 就是 0 也不会导致数组越界
+                    // 2. job 内部调用，此时的 flushIndex 就是当前正在执行的 job 在队列中的 index，所以这里 + 1
+                    //    表示从下一个 job 开始逐个查找 PRE 标识的 job 进行同步执行
+                    //    此时会阻塞当前正在执行的 job, 直到队列中所有的 job.PRE 执行完毕后，才会继续往下执行当前 job
+                    //    同时注意 job.PRE 执行完一次后就会从队列中移除
+                    for (; i < queue.length; i++) {
+                      const cb = queue[i]
+                      if (cb && cb.flags! & SchedulerJobFlags.PRE) {
+                        queue.splice(i, 1) // 从 queue 中移除
+                        i--
+                        cb()
+                      }
                     }
                   }
-                }
-                // 这里面也可以调用 flushPostFlushCbs 执行 通过 queuePostFlushCb(cb) 注册的函数
+                  // 这里面也可以调用 flushPostFlushCbs 执行 通过 queuePostFlushCb(cb) 注册的函数
                   // 进行提前执行，不过这里面一般是组件更新函数，通常不在这里执行 flushPostFlushCbs
                   // 不过 watch 的更新函数，可能会会这么执行
                   flushPostFlushCbs() { }

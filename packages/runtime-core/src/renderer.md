@@ -1525,7 +1525,19 @@ app.mount(container, isHydrate) {
               // OR parent calling processComponent (next: VNode)
               let originNext = next;
               // Disallow component effect recursion during pre-lifecycle hooks.
-              toggleRecurse(instance, false);
+              // toggleRecurse(instance, false);
+              // 注意在执行更新函数时, 设置了
+              // effect.flags &= ~EffectFlags.ALLOW_RECURSE
+              // job.flags! &= ~SchedulerJobFlags.ALLOW_RECURSE
+              toggleRecurse({ effect, job }, allowed)(instance, false){
+                if (allowed) {
+                  effect.flags |= EffectFlags.ALLOW_RECURSE
+                  job.flags! |= SchedulerJobFlags.ALLOW_RECURSE
+                } else {
+                  effect.flags &= ~EffectFlags.ALLOW_RECURSE
+                  job.flags! &= ~SchedulerJobFlags.ALLOW_RECURSE
+                }
+              }
               // 这里在更新属性时, 关闭了 ALLOW_RECURSE, 避免设置属性触发重复的放入队列
               if (next) {
                 // from parent calling processComponent
@@ -1561,109 +1573,150 @@ app.mount(container, isHydrate) {
                         patch(prevTree, nextTree) {
                           // patch 中会比较前后两个 vnode: prevTree, nextTree 是否需要更新
                           // 同时还要注意此时还是在 parentJob 中执行
-                          child.update() { // - 此时正在执行的就是 childUpdateJob
-                            updateProps() {
-                              props.x = y ->
-                              // 注意此时的 toggleRecurse(instance, false) 上面已经执行
-                              // 关键是这里的 toggleRecurse(instance, false)
-                              // 设置了此时不可以进行 ALLOW_RECURSE,
-                              // 避免了在 sub 在运行时, 又触发 set 导致重复添加
-                              instance.effect.flags &= ~EffectFlags.ALLOW_RECURSE
-                              instance.job.flags! &= ~SchedulerJobFlags.ALLOW_RECURSE
-                              // 同时 child.update() 正在执行,那么此时
-                              instance.effect.flags |= EffectFlags.RUNNING
-                              dep.trigger() {
-                                dep.version++
-                                dep.notify() {
-                                  startBatch() {  batchDepth++ }
-                                  for (let link = this.subs; link; link = link.prevSub) {
-                                    sub.notify() {
-                                      if(sub.flags & EffectFlags.RUNNING) {
-                                        // 不允许递归调用则直接返回, 默认为不允许递归
-                                        if(!(sub.flags & EffectFlags.ALLOW_RECURSE)) return
-                                        // NOTE: 这里是关键:
-                                        // childUpdateJob 满足 RUNNING && !ALLOW_RECURSE
-                                        // 故这里直接 返回(return), 不会执行 queueJob(childUpdateJob)
-                                        // 这里就避免了重复执行这里的 childUpdateJob,
-                                        // 因为当前的 childUpdateJob 本身就在执行,
-                                        // 没必要再将 childUpdateJob 放入队列执行
-                                        // childWatchJob 不满足 RUNNING, 也不满足 !ALLOW_RECURSE
-                                        // 故直接执行 queueJob(childWatchJob), 放入队列
-                                      }
-                                      if(sub.flags & EffectFlags.NOTIFIED) return
-                                      // ...
-                                      batch(sub) {
-                                        sub.flags |= EffectFlags.NOTIFIED
-                                        if(isComputed(sub)) {
-                                          sub.next = batchedComputed
-                                          batchedComputed = sub
-                                        } else {
-                                          sub.next = batchedSub
-                                          batchedSub = sub
+                          // 来自父组件的 job, 里面调用子组件执行 instance.update()
+                          // 触发属性的 set -> dep.trigger
+                          if (shouldUpdateComponent(prevTree, nextTree)) {
+                            // 这里的 instance.update() 是子组件的 update()
+                            child.update() { // - 此时正在执行的就是 childUpdateJob
+                              effect.run(){
+                                effect.flags |= EffectFlags.RUNNING
+                                componentUpdateFn() {
+                                  // 此时这里的 updateProps 触发的 set 会被提前返回, 不会执行 queueJob()
+                                  updateProps() {
+                                    props.x = y ->
+                                    // 注意此时的 toggleRecurse(instance, false) 上面已经执行
+                                    // 关键是这里的 toggleRecurse(instance, false)
+                                    // 设置了此时不可以进行 ALLOW_RECURSE,
+                                    // 避免了在 sub 在运行时, 又触发 set 导致重复添加
+                                    // toggleRecurse(instance, false) 函数中设置了: flags
+                                    // instance.effect.flags &= ~EffectFlags.ALLOW_RECURSE
+                                    // instance.job.flags! &= ~SchedulerJobFlags.ALLOW_RECURSE
+                                    // 同时 child.update() 正在执行,那么此时
+
+                                    instance.effect.flags |= EffectFlags.RUNNING
+                                    dep.trigger() {
+                                      dep.version++
+                                      dep.notify() {
+                                        startBatch() {  batchDepth++ }
+                                        for (let link = this.subs; link; link = link.prevSub) {
+                                          sub.notify() {
+                                            // 同时设置属性时, effect 正在 RUNNING
+                                            if(sub.flags & EffectFlags.RUNNING) {
+                                              // 不允许递归调用则直接返回, 默认为不允许递归
+                                              // - 故这里设置属性触发的
+                                              // dep.trigger -> dep.notify 直接返回
+                                              if(!(sub.flags & EffectFlags.ALLOW_RECURSE)) {
+                                                return
+                                              }
+                                              // NOTE: 这里是关键(必须同时满足 RUNNING,!ALLOW_RECURSE):
+                                              // childUpdateJob 同时 满足 RUNNING && !ALLOW_RECURSE
+                                              // 故这里直接 返回(return), 不会执行 queueJob(childUpdateJob)
+                                              // 这里就避免了重复执行这里的 childUpdateJob,
+                                              // 因为当前的 childUpdateJob 本身就在执行,
+                                              // 没必要再将 childUpdateJob 放入队列执行
+                                              // childWatchJob 不满足 RUNNING, 也不满足 !ALLOW_RECURSE
+                                              // 故直接执行 queueJob(childWatchJob), 放入队列
+                                            }
+                                            if(sub.flags & EffectFlags.NOTIFIED) return
+                                            // ...
+                                            batch(sub) {
+                                              sub.flags |= EffectFlags.NOTIFIED
+                                              if(isComputed(sub)) {
+                                                sub.next = batchedComputed
+                                                batchedComputed = sub
+                                              } else {
+                                                sub.next = batchedSub
+                                                batchedSub = sub
+                                              }
+                                            }
+                                          }
+                                        }
+                                        endBatch() {
+                                          batchDepth--
+                                          if(batchDepth > 0) return
+                                          while(batchedSub) {
+                                            e = batchedSub
+                                            batchedSub = undefined
+                                            while(e) {
+                                              next = e.next
+                                              e.flags &= ~EffectFlags.NOTIFIED
+                                              if (!(e.flags & EffectFlags.ACTIVE)) return
+                                              e.trigger(){
+                                                const dirty = isDirty(e){}
+                                                if (!dirty) return
+                                                e.run() {
+                                                  if (this.flags & EffectFlags.ACTIVE) return
+                                                  e.flags |= EffectFlags.RUNNING
+                                                  prepareDeps(this) {
+                                                    for (let link = sub.deps; link; link = link.nextDep) {
+                                                      link.version = -1
+                                                      link.prevActiveLink = link.dep.activeLink
+                                                      link.dep.activeLink = link
+                                                    }
+                                                  }
+                                                  // NOTE: fn() 执行前,
+                                                  // 1. NOTIFIED 已经被去掉
+                                                  // 2. batchedSub 已经被置为 undefined
+                                                  e.fn() {
+                                                    dep.track() {
+                                                      link.version = this.version
+                                                    }
+                                                    // 上面的属性设置值, 触发这里 dep.trigger, 由 RUNNING 进行拦截
+                                                    dep.trigger() {
+                                                      // RUNNING 正在运行的 sub 中设置值
+                                                      // !ALLOW_RECURSE 避免触发递归循环 dep.trigger 提前返回
+                                                      if(sub.flags & Effect.flags.RUNNING) {
+                                                        if(!(sub.flags & EffectFlags.ALLOW_RECURSE)) return
+                                                      }
+                                                      if(sub.flags & Effect.flags.NOTIFIED) return
+                                                      // ...
+                                                    }
+                                                  }
+                                                  // 依赖收集结束后, 清除依赖(之前存在的, 这次运行后不存在的, 需要移除)
+                                                  cleanupDeps(this) {
+                                                    // 清理 link.version == -1 的 dep, 说明是没有被读取到的 dep
+                                                    // restore previous active link if any
+                                                    link.dep.activeLink = link.prevActiveLink
+                                                    link.prevActiveLink = undefined
+                                                  }
+                                                  // 去掉 RUNNING flag
+                                                  e.flags &= ~EffectFlags.RUNNING
+                                                }
+                                              }
+                                              e.next = next // 继续下一个 sub 的更新
+                                            }
+                                          }
                                         }
                                       }
                                     }
+                                    // 此时队列: [parentJob, childWatchJob.PRE]
                                   }
-                                  endBatch() {
-                                    batchDepth--
-                                    if(batchDepth > 0) return
-                                    while(batchedSub) {
-                                      e = batchedSub
-                                      batchedSub = undefined
-                                      while(e) {
-                                        next = e.next
-                                        e.flags &= ~EffectFlags.NOTIFIED
-                                        if (!(e.flags & EffectFlags.ACTIVE)) return
-                                        e.trigger(){
-                                          const dirty = isDirty(e){}
-                                          if (!dirty) return
-                                          e.run() {
-                                            if (this.flags & EffectFlags.ACTIVE) return
-                                            e.flags |= EffectFlags.RUNNING
-                                            prepareDeps(this) {
-                                              for (let link = sub.deps; link; link = link.nextDep) {
-                                                link.version = -1
-                                                link.prevActiveLink = link.dep.activeLink
-                                                link.dep.activeLink = link
-                                              }
-                                            }
-                                            // NOTE: fn() 执行前,
-                                            // 1. NOTIFIED 已经被去掉
-                                            // 2. batchedSub 已经被置为 undefined
-                                            e.fn() {
-                                              dep.track() {
-                                                link.version = this.version
-                                              }
-                                              // 上面的属性设置值, 触发这里 dep.trigger, 由 RUNNING 进行拦截
-                                              dep.trigger() {
-                                                // RUNNING 正在运行的 sub 中设置值
-                                                // !ALLOW_RECURSE 避免触发递归循环 dep.trigger 提前返回
-                                                if(sub.flags & Effect.flags.RUNNING) {
-                                                  if(!(sub.flags & EffectFlags.ALLOW_RECURSE)) return
-                                                }
-                                                if(sub.flags & Effect.flags.NOTIFIED) return
-                                                // ...
-                                              }
-                                            }
-                                            // 依赖收集结束后, 清除依赖(之前存在的, 这次运行后不存在的, 需要移除)
-                                            cleanupDeps(this) {
-                                              // 清理 link.version == -1 的 dep, 说明是没有被读取到的 dep
-                                              // restore previous active link if any
-                                              link.dep.activeLink = link.prevActiveLink
-                                              link.prevActiveLink = undefined
-                                            }
-                                            // 去掉 RUNNING flag
-                                            e.flags &= ~EffectFlags.RUNNING
-                                          }
-                                        }
-                                        e.next = next // 继续下一个 sub 的更新
-                                      }
+                                  updateSlots(){}
+                                  toggleRecurse(instance, true)
+                                  const nextTree = renderComponentRoot(instance)
+                                  const prevTree = instance.subTree
+                                  patch(prevTree, nextTree) {
+                                    if (shouldUpdateComponent(prevTree, nextTree)) {
+                                      // ...
                                     }
                                   }
                                 }
+                                effect.flags &= ~EffectFlags.RUNNING
                               }
-                              // 此时队列: [parentJob, childWatchJob.PRE]
                             }
+                            // 当 instance.update() 执行完后,所有的 dep.version 与 link.version 都同步了
+                            // 后面再次执行组组建对应的 job 时:
+                            // 这里需要区分: job, update 的定义
+                            // job = effect.runIfDirty.bind(effect)
+                            // update = effect.run.bind(effect)
+                            // 发现父组件在调用 instance.update() 时, 会执行 effect.run(), 无需脏检查
+                            // 而在队列中 job 函数执行时, 执行的却是 effect.runIfDirty(), 也就是每个 job
+                            // 执行时, 需要先执行脏检查, 然后再执行 effect.run(),
+                            // 这样当父组件执行 instance.update()时, 会将
+                            // dep.version 与 link.version 都同步, 后面的子组件的 job 执行时,
+                            // 会发现此时的 sub 已经不脏了, 就会跳过此处的 job 执行, 不会执行 effect.run
+                            // 这就是 父组件调用子组件的更新函数, 后面子组件的 job 执行时, 不会再次执行
+                            // effect.run, 这样就解决了子组件的重复更新问题
                           }
                         }
                       }
