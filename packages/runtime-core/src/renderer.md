@@ -1770,7 +1770,7 @@ app.mount(container, isHydrate) {
                   // 这里保证了 watch() 默认的更新回调函数会在组件的更新前面(包括 beforeUpdate 等)执行
                   flushPreFlushCbs(instance) {
                     // [parentJob, childWatchJob.PRE]
-                    // 在之前组件 beforeUpdate hook 前, 先执行队列中的 watcher Job,
+                    // 在执行组件 beforeUpdate hook 前, 先执行队列中的 watcher Job,
                     // 以保证在 render update 前面执行
                     childWatchJob.PRE() // 执行完后,将其从队列中移除
                     // [parentJob]
@@ -1783,7 +1783,8 @@ app.mount(container, isHydrate) {
                 // from component's own state change
                 // 这里是在 else 分支 说明来自父组件的更新优先级高于子组件的更新,
                 // 也就是在父组件,子组件都更新时,只进入父组件的更新逻辑中,其会执行子组件的更新
-                // 父组件的更新会包含子组件的更新, 所以有限执行父组件的更新,而子组件的更新 job 直接废弃掉.
+                // 父组件的更新会包含子组件的更新, 所以优先执行父组件的更新,
+                // 而子组件的更新 job 直接废弃掉(如何废弃?).
                 // 来自组件内部状态的更新, 复用组件自己的 instance.vnode 即可, 无需再次创建
                 // 因为父组件没有更新, 也就是没有创建新的 subTree, 故当前组件的 vnode 就是之前父组件创建的 vnode
                 // NOTE: 子组件的 vnode 都是通过父组件创建的
