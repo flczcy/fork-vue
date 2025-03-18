@@ -91,6 +91,7 @@ export class ComputedRefImpl<T = any> implements Subscriber {
   next?: Subscriber = undefined
 
   // for backwards compat
+  // https://github.com/vuejs/core/pull/4165
   effect: this = this
   // dev only
   onTrack?: (event: DebuggerEvent) => void
