@@ -226,7 +226,7 @@ export function initProps(
     // stateful (确保 instance.props 为浅的响应式)
     instance.props = isSSR ? props : shallowReactive(props)
   } else {
-    // 函数组件 fn = () => rennder()
+    // 函数组件 fn = () => render()
     // h(fn, rawProps, [])
     if (!instance.type.props) {
       // 若是 fn.props 函数本身没有定义 props, 传入的 rawProps 就全部是 attrs

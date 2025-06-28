@@ -607,6 +607,10 @@ function createBaseVNode(
     //   }
     // }
     // setCurrentRenderingInstance(prev)
+    // vnode 执行组件渲染函数 (render) 对应的组件实例,
+    // 包括元素 vnode.ctx, 组件 vnode.ctx
+    // 也就是一个组件可以包括多个 不同类型的 vnode, 不同的 vnode 在进行渲染时的 ctx 就是组件的渲染函数调用时设置的
+    // renderComponentRoot() 中设置的
     ctx: currentRenderingInstance, // patch 时创建组件后赋值(这里为创建的 App 组件实例)
   } as VNode
 
@@ -676,7 +680,7 @@ export { createBaseVNode as createElementVNode }
 // 这里是暴露给外部 h 函数的, 故这里的 patchFlag 默认为 0, dynamicProps 为 null, isBlockNode 为 false
 // h(a, null, [...]) -> createVNode(a, null, children, 0, null, false)
 // h 函数只接受 3 个参数 内部调用 createVNode(),
-// 后面的三个参数(patchFlag, dynamicProps, isBlockNode)传入默认值 是专门正对 vue 模板编译函数的, 正对的是
+// 后面的三个参数(patchFlag, dynamicProps, isBlockNode)传入默认值 是专门针对 vue 模板编译函数的, 针对的是
 // 模板编译时的优化参数(flags), 与运行时无关, h 函数就是手动创建运行时的 vnode 函数, 这也就是 vue jsx 中调用
 // 的 h 函数
 // h(type, propsOrChildren, children) {

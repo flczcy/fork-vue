@@ -26,13 +26,20 @@ export function provide<T, K = InjectionKey<T> | string | number>(
     const parentProvides =
       currentInstance.parent && currentInstance.parent.provides
     if (parentProvides === provides) {
+      // 首次执行 provide(key,value) 时, parentProvides === provides 是相等的
+      // 此时创建自己的 {}, 同时原型执行 parent.provides
       provides = currentInstance.provides = Object.create(parentProvides)
     }
+    // provide(key,value)
+    // provide(key,value)
+    // provide(key,value) 多次执行, 只有第一次创建 instance.provides
+    // 后面的则复用第一次的 provide 创建的 instance.provides
     // TS doesn't allow symbol as index type
     provides[key as string] = value
   }
 }
 
+// 查找对应的祖先组件的 provide key
 export function inject<T>(key: InjectionKey<T> | string): T | undefined
 export function inject<T>(
   key: InjectionKey<T> | string,
@@ -51,7 +58,7 @@ export function inject(
 ) {
   // fallback to `currentRenderingInstance` so that this can be called in
   // a functional component
-  // 函数组件中没有 currentRenderingInstance, 只有 currentRenderingInstance
+  // 函数组件中没有 currentInstance, 只有 currentRenderingInstance
   const instance = currentInstance || currentRenderingInstance
 
   // also support looking up from app-level provides w/ `app.runWithContext()`

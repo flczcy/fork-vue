@@ -60,7 +60,7 @@ export function injectHook(
     // can be properly deduped by the scheduler. "__weh" stands for "with error
     // handling".
     const wrappedHook =
-      hook.__weh ||
+      hook.__weh /* with error handling*/ ||
       (hook.__weh = (...args: unknown[]) => {
         // disable tracking inside all lifecycle hooks
         // since they can potentially be called inside effects.
@@ -68,9 +68,15 @@ export function injectHook(
         // Set currentInstance during hook invocation.
         // This assumes the hook does not synchronously trigger other hooks, which
         // can only be false when the user does something really funky.
-        const reset = setCurrentInstance(target)
+        const reset = setCurrentInstance(target) //  currentInstance = target
+        // wrappedHook() 执行时, setCurrentInstance(target)
+        // 为 wrappedHook 定义时捕获的 target 到 currentInstance,
+        // 确保 hook(args) 执行时的上下文中可以获取到对应的 currentInstance
+        // 即可以通过 getCurrentInstance() 获取对应的组件实例
+        // 实际就是讲 setup 函数执行时对应的 currentInstance 通过闭包保存起来,
+        // 后续执行时 可以获取到那时执行时的 setup 对应的 currentInstance
         const res = callWithAsyncErrorHandling(hook, target, type, args)
-        reset()
+        reset() // currentInstance = target
         resetTracking()
         return res
       })
@@ -115,7 +121,7 @@ const createHook =
       !isInSSRComponentSetup ||
       lifecycle === LifecycleHooks.SERVER_PREFETCH
     ) {
-      // server render 中没有这些 lifecycle 钩子
+      // server render 中没有这些 lifecycle 钩子, 这里的参数 target 默认捕获就是 currentInstance
       injectHook(lifecycle, (...args: unknown[]) => hook(...args), target)
     }
   }

@@ -474,6 +474,7 @@ export function createAppAPI<HostElement>(
         const lastApp = currentApp
         currentApp = app
         try {
+          // 主要是保证 fn() 的执行上下文中有 currentApp, 这确保执行中有 app 上下文
           return fn()
         } finally {
           currentApp = lastApp

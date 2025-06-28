@@ -200,6 +200,14 @@ export class ReactiveEffect<T = any>
 
     try {
       return this.fn()
+      // 具体来说，当 try 块中的代码遇到 return 语句时，
+      // JavaScript 引擎会先准备返回值:
+      // (执行完函数后, 返回值先临时保存, 等执行完 finally 后, 再返回之前函数执行的返回值)
+      // 然后执行 finally 块中的代码，最后才会真正返回到调用者。
+      // ==> const res = this.fn()
+      // finally()
+      // return res
+      // 只不过即使出错了, 也会执行这里的 finally
     } finally {
       if (__DEV__ && activeSub !== this) {
         warn(

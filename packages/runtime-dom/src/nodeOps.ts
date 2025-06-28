@@ -74,11 +74,21 @@ export const nodeOps: Omit<RendererOptions<Node, Element>, 'patchProp'> = {
 
   createComment: text => doc.createComment(text),
 
+  // 这里的 node 必须是文本节点
   setText: (node, text) => {
+    // nodeValue 主要用于设置文本节点,
+    // 对于元素节点则无效
     node.nodeValue = text
   },
 
+  // let elementNode = document.createElement("div");
+  // elementNode.innerHTML = "<p>Hello, <span>World</span>!</p>";
+  // elementNode.textContent = "<h1>New Text</h1>";
+  // console.log(elementNode.innerHTML); // 输出: "&lt;h1&gt;New Text&lt;/h1&gt;"
+  // console.log(elementNode.textContent); // 输出: "<h1>New Text</h1>"
+  // textContent 设置值, 不会像 innerHTML 那样会导致 XSS 攻击, 不会解析 script 脚本
   setElementText: (el, text) => {
+    // 也可以用于文本节点，但通常更推荐直接使用 nodeValue。
     el.textContent = text
   },
 

@@ -1230,6 +1230,7 @@ function baseCreateRenderer(
     // mounting
     const compatMountInstance =
       __COMPAT__ && initialVNode.isCompatRoot && initialVNode.component
+    // vnode.component = instance
     const instance: ComponentInternalInstance =
       compatMountInstance ||
       (initialVNode.component = createComponentInstance(
@@ -1345,6 +1346,7 @@ function baseCreateRenderer(
     namespace: ElementNamespace,
     optimized,
   ) => {
+    // 组件的更新函数
     const componentUpdateFn = () => {
       if (!instance.isMounted) {
         let vnodeHook: VNodeHook | null | undefined
@@ -1355,6 +1357,9 @@ function baseCreateRenderer(
         toggleRecurse(instance, false)
         // beforeMount hook
         if (bm) {
+          // 这里的生命周期钩子通过 vue 提供的 hooks onBeforeMount 在 setup 函数中进行注册的
+          // onBeforeMount(hook), 会将这里函数传入的 hook 注入到 setup 函数执行上下对应的组件实例中
+          // instance.bm.push(hook)
           invokeArrayFns(bm)
         }
         // onVnodeBeforeMount
@@ -1426,9 +1431,10 @@ function baseCreateRenderer(
           if (__DEV__) {
             startMeasure(instance, `patch`)
           }
+          // 进入深度优先递归 patch
           patch(
-            null,
-            subTree,
+            null, //    n1
+            subTree, // n2
             container,
             anchor,
             instance /* parentComponent */,
@@ -1444,6 +1450,7 @@ function baseCreateRenderer(
         }
         // mounted hook
         if (m) {
+          // 微任务异步队列中执行, 所以在 setRef 后面执行
           queuePostRenderEffect(m, parentSuspense)
         }
         // onVnodeMounted
@@ -1621,15 +1628,36 @@ function baseCreateRenderer(
 
     // create reactive effect for rendering
     instance.scope.on()
+    // this.fn = componentUpdateFn
     const effect = (instance.effect = new ReactiveEffect(componentUpdateFn))
     instance.scope.off()
 
-    const update = (instance.update = effect.run.bind(effect))
+    const update = (instance.update = effect.run.bind(effect)) /*{
+      return componentUpdateFn()
+    }*/
 
     // 注意这里的 job 是更新前需要脏检查
-    const job: SchedulerJob = (instance.job = effect.runIfDirty.bind(effect))
+    // prettier-ignore
+    const job: SchedulerJob = (instance.job = effect.runIfDirty.bind(effect)) /*{
+      if (isDirty(instance.effect)) {
+        // 执行 instance.job(), 会进行判断当前实例的 instance.effect 的 deps 进行脏检查
+        instance.effect.run()
+      }
+    } */
     job.i = instance
     job.id = instance.uid
+    // dep.set 会触发对应的 effect.scheduler() 函数, 即执行 queueJob(job)
+    // 多个 dep.set 会触发多次这里的 effect.scheduler() -> queueJob(job), job 需要去重
+    // 最终的由 dep.set 触发的 job 放入微任务异步队列进行执行
+    // [job1, job2, job3, ...], 每个 job() 执行前都会进行对应 job 绑定的 effect 的脏检查,
+    // 只有 dep 脏了才会进行执行 instance.effect.run() -> componentUpdateFn()
+    // 这里的脏检查可以防止嵌套的组件对应的 effect 重复的执行
+    // 比如这类 job1, 嵌套着 job2,
+    // 当执行 job1, 内部会执行一次 job2
+    // 当执行 job2, 此时会进行脏检查, 由于在 job1 中执行了一次 job2, 那么此时在队列执行的 job2 进行脏检查时,
+    // 会发现此时的 job2 已经不脏了, 所以就不会执行 effect.run(), 避免了重复执行 componentUpdateFn()
+    // 因为每次更新执行一次 componentUpdateFn 就会进行 diff 比较更新, 创建新的 vnode 与之前的旧的 vnode 进行
+    // diff 更新
     effect.scheduler = () => queueJob(job)
 
     // allowRecurse
@@ -1646,7 +1674,24 @@ function baseCreateRenderer(
     }
 
     // 这里直接 run 无需脏检查
-    update()
+    update() /*instance.effect.run(){
+      // this => instance.effect
+      this.flags |= EffectFlags.RUNNING
+      cleanupEffect(this)
+      prepareDeps(this)
+      const prevEffect = activeSub
+      const prevShouldTrack = shouldTrack
+      activeSub = this
+      shouldTrack = true
+      try {
+        return this.fn() // componentUpdateFn()
+      } finally {
+        cleanupDeps(this)
+        activeSub = prevEffect
+        shouldTrack = prevShouldTrack
+        this.flags &= ~EffectFlags.RUNNING
+      }
+    }*/
   }
 
   const updateComponentPreRender = (

@@ -59,10 +59,32 @@ export function renderComponentRoot(
     props,
     data,
     setupState,
-    ctx,
+    ctx, // { _: instance }
     inheritAttrs,
   } = instance
+  // 这里是设置组件渲染函数(render)函数的执行上下文的组件实例
+  // 也就是一个组件可以包括多个 不同类型的 vnode, 不同的 vnode 在进行渲染时的 ctx 就是组件的渲染函数调用时设置的
+  // renderComponentRoot() 中设置的
+  // render() {
+  //   return (
+  //     <section>
+  //        <h1></h1>
+  //        <h2></h2>
+  //        // ... 这里的 render 函数执行时, 调用 createBaseVNode()
+  //        // vnode.ctx = currentRenderingInstance
+  //     </section>
+  //   )
+  // }
+  // render 函数执行, 就会创建新的不同的 vnode, 此时这些新创建的 vnode.ctx 就是这里的
+  // setCurrentRenderingInstance(instance) 中设置的 currentRenderingInstance
+  // 此时处于 render 上下文中创建的 vnode.ctx = currentRenderingInstance
   const prev = setCurrentRenderingInstance(instance)
+
+  // 执行组件渲染函数函数前后的处理
+  // renderBefore()
+  // res = render()
+  // renderAfter()
+  // return res
 
   let result
   let fallthroughAttrs
@@ -91,6 +113,7 @@ export function renderComponentRoot(
             })
           : proxyToUse
       result = normalizeVNode(
+        // render(instance.proxy, renderCache, props, setupState, data, ctx)
         render!.call(
           thisProxy,
           proxyToUse!,
@@ -98,7 +121,7 @@ export function renderComponentRoot(
           __DEV__ ? shallowReadonly(props) : props,
           setupState,
           data,
-          ctx,
+          ctx, // { _: instance }
         ),
       )
       fallthroughAttrs = attrs
@@ -375,10 +398,10 @@ const isElementRoot = (vnode: VNode) => {
 // 1. 组件内部的状态变化,触发更新
 // 2. 来自父组件的更新,需要比对父组件的 subTree,
 //    2.1 父组件传入给子组件的 props 变化了 - 需要更新
-//    2.2 父组件传入给子组件的 slots 变化了 - 需要更新
+//    2.2 父组件传入给子组件的 slots(children) 变化了 - 需要更新
 //        如何区分传入的 slots 是动态的还是静态的?
 //        在模板编译中, 会通过 AST 词法分析来标记是否动态
-//        在手写的render 函数中, 统一设置为 动态, 即使实际传入为静态的, 也视为动态的,
+//        在手写的 render 函数中 (jsx), 统一设置为 动态, 即使实际传入为静态的, 也视为动态的,
 //        这样只要父组件有传入子组件 children, 也被视为需要更新
 export function shouldUpdateComponent(
   prevVNode: VNode,

@@ -126,7 +126,7 @@ app = createApp(App, rootProps) {
 app.mount(container, isHydrate) {
   // 这是 root vnode, 但是这里没有传入 children,
   // 也即传入的组件 App 中, 在作为根组件时, 传入不了 slots,
-  // 所有的 vnode 都是组件 subTrre 的一部分
+  // 所有的 vnode 都是组件 subTree 的一部分
   // 所有的 vnode 都是在 patch 中进行的, 最终转换为组件或者元素的
   // createVNode(type, props, children)
   //   -> patch(vnode) -> createComponent(vnode) -> createElement(vnode)
@@ -169,7 +169,7 @@ app.mount(container, isHydrate) {
   // 以上的 vnode 是在 root component 创建前创建的 所以在创建 root vnode 时,
   // currentRenderingInstance 没有被设置
   // 渲染 root vnode
-  // isHydrate && hydrate &&  hydrate(vnode, container)
+  // isHydrate && hydrate && hydrate(vnode, container)
   render(vnode, container) {
     patch(container._vnode || null, vnode, container, anchor = null, parentComponent = null) {
       const { type, ref, shapeFlag } = vnode
@@ -203,7 +203,7 @@ app.mount(container, isHydrate) {
             type, vnode.type,
             subTree: null,
             parent: parent,
-            appContext: appContext, // 最终继承子 rootVnode.appContext
+            appContext: appContext, // 最终继承自 rootVnode.appContext
             // state
             ctx: EMPTY_OBJ, // 下面立即设置 { _: instance }
             data: EMPTY_OBJ,

@@ -647,6 +647,7 @@ export function createComponentInstance(
     // { foo: String } => {foo: { type: String, required: false, default: undefined, ...   }}
     // [{ foo: String }, {bar: Number, default: 0}] => { foo: {}, bar: { type: Number, default: 0 }}
     // h(
+    //   // h 函数的第一个参数 type 为组件对象, 里面的 props 是组件的 props
     //   {
     //     // 这里是写在组件里面, 在创建 vnode 时, 不会涉及这里
     //     // 只有在创建组件时, 才会设置这里面的 propsOptions
@@ -673,6 +674,7 @@ export function createComponentInstance(
     //       'update:fooBar': null
     //     }
     //   },
+    //   // h 函数的第二个参数是传入给 vnode 的 props 不要与 type 中的 props 混淆了
     //   {
     //     // 传入给 vnode 的 vnode.props: rawProps, 可以包含(组件事件,组件属性,其他属性)
     //     id: 1, // 是否存在组件的 propsOptions 存在放入 instance.props, 不存在放入 instance.attrs
@@ -695,11 +697,11 @@ export function createComponentInstance(
     // instance.propsOptions 中的 key 是进行 camelize 的, 都是 camelCase
     // instance.props 中的 key 是进行 camelize 的, 都是 camelCase
     // instance.attrs 中的 key 不进行 camelize, 保持原始传入的 key
-    propsOptions: normalizePropsOptions(type, appContext),
+    propsOptions: normalizePropsOptions(type, appContext), // type 为组件对象
     // ['a', 'b'] => { a: null, b: null}
     // { a: () => {}, b: null }
     // 定义组件暴露的事件函数, 当执行 emit('name') 需要满足时 emits 中定义的事件名称
-    emitsOptions: normalizeEmitsOptions(type, appContext),
+    emitsOptions: normalizeEmitsOptions(type, appContext), // type 为组件对象
 
     // emit
     emit: null!, // to be set immediately
@@ -916,7 +918,10 @@ function setupStatefulComponent(
   // 0. create render proxy property access cache
   instance.accessCache = Object.create(null)
   // 1. create public instance / render proxy
-  instance.proxy = new Proxy(instance.ctx, PublicInstanceProxyHandlers)
+  instance.proxy = new Proxy(
+    instance.ctx, // { _: instance }
+    PublicInstanceProxyHandlers,
+  )
   if (__DEV__) {
     exposePropsOnRenderContext(instance)
   }
@@ -924,11 +929,16 @@ function setupStatefulComponent(
   const { setup } = Component
   if (setup) {
     pauseTracking()
+    // 注意也有给 instance.setupContext 进行赋值
+    // instance.setupContext = setupContext
     const setupContext = (instance.setupContext =
+      // setup(props, ctx), setup(props)
       setup.length > 1 ? createSetupContext(instance) : null)
     const reset = setCurrentInstance(instance)
     const setupResult = callWithErrorHandling(
-      setup,
+      setup, // 执行 setup(instance.props, setupContext) 函数, 传入参数 props, setupContext
+      // 即我们在 setup 函数中书写的 setup(props, ctx) 中的 props, ctx
+      // 就是来自这里的 instance.props, instance.setupContext
       instance,
       ErrorCodes.SETUP_FUNCTION,
       [
@@ -936,6 +946,7 @@ function setupStatefulComponent(
         setupContext,
       ],
     )
+    // setup 函数可以返回 promise
     const isAsyncSetup = isPromise(setupResult)
     resetTracking()
     reset()
@@ -1009,6 +1020,12 @@ export function handleSetupResult(
     if (__DEV__ || __FEATURE_PROD_DEVTOOLS__) {
       instance.devtoolsRawSetupState = setupResult
     }
+    // { a:1, b: ref(0) } ->
+    // setupState.a -> 1
+    // setupState.b -> setupState.b.value -> 0
+    // 若是返回的对象中有 ref, 那么最终会自动读取 ref.value
+    // set 也是一样 setupState.b = 1 -> setupState.b.value = 1
+    // 注意: 这里只会进行 shallow unwrap ref, 不会进行嵌套的解包 ref
     instance.setupState = proxyRefs(setupResult)
     if (__DEV__) {
       exposeSetupStateOnRenderContext(instance)
@@ -1106,6 +1123,7 @@ export function finishComponentSetup(
       }
     }
 
+    // 此时的 render() 函数还未执行, 在 setupRenderEffect 中进行执行 subTree = instance.render()
     instance.render = (Component.render || NOOP) as InternalRenderFunction
 
     // for runtime-compiled render functions using `with` blocks, the render
